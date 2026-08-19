@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ligand3d — paste a structure</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #16181d; --muted: #5c6370;
+    --border: #d8dce3; --accent: #2f6f4f; --accent-fg: #ffffff; --field: #f7f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --fg: #e8eaee; --muted: #9aa2ae;
+      --border: #2e333c; --accent: #4c9a72; --accent-fg: #0d0f12; --field: #1d2027;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg); margin: 0;
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center; padding: 2.5rem 1.25rem;
+  }
+  main { width: 100%; max-width: 46rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 .35rem; letter-spacing: -0.01em; }
+  p { color: var(--muted); margin: 0 0 1.5rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+  label { display: block; font-weight: 600; margin: 1.25rem 0 .4rem; }
+  input, textarea {
+    width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .9rem; padding: .6rem .7rem; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--field); color: var(--fg);
+  }
+  textarea { min-height: 12rem; resize: vertical; }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer; margin-top: 1.25rem;
+    padding: .6rem 1.2rem; border-radius: 6px; border: 1px solid transparent;
+    background: var(--accent); color: var(--accent-fg);
+  }
+  #status { margin-top: 1rem; font-size: .87rem; color: var(--muted); }
+  #status.error { color: #c0392b; }
+  #status.ok { color: var(--accent); }
+  .note {
+    margin-top: 2rem; padding: .9rem 1rem; border-radius: 6px;
+    border: 1px solid var(--border); font-size: .85rem; color: var(--muted);
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Paste a structure</h1>
+  <p>The Ketcher bundle could not be fetched, so this is the text fallback. Give a SMILES
+     string or paste a molblock — either works.</p>
+
+  <label for="smiles">SMILES <span style="font-weight:400;color:var(--muted)">— stereo with <code>@ @@ / \</code></span></label>
+  <input id="smiles" placeholder="C[C@@H](O)[C@H](N)C(=O)O" autofocus>
+
+  <label for="molblock">…or a molblock</label>
+  <textarea id="molblock" placeholder="paste MOL / SDF text here"></textarea>
+
+  <button id="send">Use this molecule</button>
+  <div id="status"></div>
+
+  <div class="note">
+    To get the graphical sketcher, download Ketcher's standalone build and point
+    <code>LIGAND3D_KETCHER_DIR</code> at the directory containing its
+    <code>index.html</code>.
+  </div>
+</main>
+
+<script>
+const statusEl = document.getElementById('status');
+const sendBtn = document.getElementById('send');
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = kind || '';
+}
+
+sendBtn.addEventListener('click', async () => {
+  const smiles = document.getElementById('smiles').value.trim();
+  const molblock = document.getElementById('molblock').value.trim();
+  if (!smiles && !molblock) {
+    setStatus('enter a SMILES string or paste a molblock', 'error');
+    return;
+  }
+  sendBtn.disabled = true;
+  try {
+    const response = await fetch('/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ smiles, molblock }),
+    });
+    if (!response.ok) throw new Error('server returned ' + response.status);
+    setStatus('sent — you can close this tab', 'ok');
+    sendBtn.textContent = 'Sent';
+  } catch (err) {
+    setStatus('could not send: ' + err.message, 'error');
+    sendBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# scratch output
+*.pdb
+*.sdf
+*.xyz
+!examples/**/*.pdb
+!examples/**/*.sdf
+!tests/data/*.sdf
+!tests/data/*.mol
+
+# CREST leaves a lot behind
+crest_*.xyz
+crest.*
+coord
+gfnff_*
+wbo
+cre_members
+confcross.xyz
+ensemble_energies.log
+*.mdrestart

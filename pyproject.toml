@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ligand3d"
+version = "0.1.0"
+description = "Turn a 2D molecule into a minimized 3D structure"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Seth M. Woodbury", email = "woodbuse@uw.edu" }]
+keywords = ["chemistry", "cheminformatics", "rdkit", "conformers", "force-field"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "rdkit>=2023.9",
+    "numpy>=1.24",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+# Semi-empirical tier. tblite ships manylinux wheels; no compiler needed.
+xtb = ["tblite>=0.4", "ase>=3.22"]
+# Machine-learned potentials. Install torch from the CPU index first if you do not
+# have a GPU, otherwise pip pulls the multi-GB CUDA build:
+#   uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+mlff = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]
+protonation = ["dimorphite-dl>=2.0"]
+all = [
+    "tblite>=0.4",
+    "ase>=3.22",
+    "torch>=2.0",
+    "mace-torch>=0.3.9",
+    "dimorphite-dl>=2.0",
+]
+dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+
+[project.scripts]
+ligand3d = "ligand3d.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/SethWoodbury/ligand3d"
+Issues = "https://github.com/SethWoodbury/ligand3d/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ligand3d"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "backend: test requires an optional minimization backend",
+    "slow: test takes more than a few seconds",
+]
