@@ -371,7 +371,11 @@ class TestSessionAPI:
         base, tmp_path = session
         job = _run(base, "CC(N)C(=O)O", _settings(tmp_path))
         assert job["state"] == "error"
-        assert "undefined stereocenters" in job["error"]
+        # The message names the kind of ambiguity and points at the preview,
+        # because a bare atom index is not actionable on its own.
+        assert "stereochemistry is undefined" in job["error"]
+        assert "stereocenter with no configuration" in job["error"]
+        assert "preview" in job["error"]
 
     def test_protonation_mode_reaches_the_pipeline(self, session):
         base, tmp_path = session

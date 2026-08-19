@@ -117,6 +117,35 @@
   #pathPreview .warn { color: var(--warn); }
   #pathPreview .err  { color: var(--err); }
 
+  /* the "how it is being read" panel */
+  #previewCard { display: flex; flex-direction: column; }
+  #previewBox {
+    background: var(--soft); border: 1px solid var(--line); border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 210px; padding: .3rem; overflow: hidden;
+  }
+  #previewBox svg { max-width: 100%; height: auto; display: block; }
+  #previewMsg { font-size: .75rem; color: var(--muted); margin-top: .4rem; }
+  #previewMsg .bad { color: var(--warn); }
+  #previewMsg .err { color: var(--err); }
+  #previewSmiles {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem;
+    color: var(--muted); word-break: break-all; margin-top: .3rem;
+  }
+  .keyrow { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .72rem;
+            color: var(--muted); margin-top: .35rem; align-items: center; }
+  .dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block;
+         margin-right: .28rem; vertical-align: -1px; }
+  .previewhead { display: flex; align-items: center; gap: .5rem; margin: 0 0 .5rem; }
+
+  footer {
+    padding: .5rem .9rem; border-top: 1px solid var(--border); background: var(--panel);
+    color: var(--muted); font-size: .74rem; display: flex; gap: .6rem;
+    flex-wrap: wrap; align-items: center; flex: none;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
   #plotCard { display: none; }
   #plot { width: 100%; height: 190px; display: block; }
   #plot text { font: 10px ui-monospace, monospace; fill: var(--muted); }
@@ -180,6 +209,24 @@
         automatically.
       </p>
     </section>
+
+    <section class="card" id="previewCard">
+      <div class="previewhead">
+        <h2 style="margin:0;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:680">How ligand3d reads it</h2>
+        <span class="grow"></span>
+        <label style="display:flex;align-items:center;gap:.3rem;margin:0;font-weight:440;font-size:.76rem;cursor:pointer">
+          <input type="checkbox" id="showIndices" checked> atom numbers
+        </label>
+      </div>
+      <div id="previewBox"><span style="color:var(--muted);font-size:.78rem">draw something to see it here</span></div>
+      <div class="keyrow">
+        <span><i class="dot" style="background:#f28c26"></i>needs a configuration</span>
+        <span><i class="dot" style="background:#40a674"></i>already specified</span>
+        <span><i class="dot" style="background:#8c99b3"></i>fixed by the ring</span>
+      </div>
+      <div id="previewMsg"></div>
+      <div id="previewSmiles"></div>
+    </section>
   </div>
 
   <div class="col">
@@ -237,7 +284,6 @@
             <label for="solvent">Implicit solvent</label>
             <select id="solvent">
               <option value="">auto (water when charged)</option>
-              <option value="water">water</option>
               <option value="none">none (gas phase)</option>
             </select>
           </div>
@@ -348,6 +394,16 @@
   </div>
 </main>
 
+<footer>
+  <span><strong>ligand3d</strong> &mdash; by
+    <a href="https://github.com/SethWoodbury" target="_blank" rel="noopener">Seth M. Woodbury</a></span>
+  <span>&middot;</span>
+  <a href="https://github.com/SethWoodbury/ligand3d" target="_blank" rel="noopener">github.com/SethWoodbury/ligand3d</a>
+  <span class="grow"></span>
+  <span>built on RDKit, xTB/tblite, MACE, AIMNet2, ASE, JSME, gemmi</span>
+  <span id="versionTag"></span>
+</footer>
+
 <dialog id="confirmDialog">
   <h2 style="margin:0;font-size:.98rem">Overwrite existing files?</h2>
   <p style="color:var(--muted);font-size:.83rem;margin:.35rem 0 0">
@@ -409,15 +465,106 @@ function clearCanvas() {
   if (engineName === "jsme" && jsmeApplet) jsmeApplet.reset();
   if (engineName === "paste") { const b = el("pasteBox"); if (b) b.value = ""; }
   setStatus("");
+  schedulePreview();
 }
 
 window.jsmeOnLoad = function () {
   jsmeApplet = new JSApplet.JSME("sketchHost", "100%", "430px", {
     options: "stereo,autoez,paste,multipart",
   });
+  // Every edit refreshes the "how ligand3d reads it" panel, which is the only
+  // way to tell which atom the messages mean by number.
+  try {
+    jsmeApplet.setCallBack("AfterStructureModified", schedulePreview);
+  } catch (e) { /* older JSME: the manual refresh below still works */ }
   buildBtn.disabled = false;
   setStatus("editor ready");
+  schedulePreview();
 };
+
+/* -------------------------------------------------------------- preview */
+let previewTimer = null;
+let previewSeq = 0;
+
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(refreshPreview, 220);
+}
+
+function prefersDark() {
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+async function refreshPreview() {
+  const box = el("previewBox");
+  const msg = el("previewMsg");
+  const smi = el("previewSmiles");
+  const molblock = await readMolblock();
+
+  if (!molblock || !molblock.trim()) {
+    box.innerHTML = '<span style="color:var(--muted);font-size:.78rem">' +
+      "draw something to see it here</span>";
+    msg.textContent = ""; smi.textContent = "";
+    return;
+  }
+
+  const seq = ++previewSeq;
+  let data;
+  try {
+    data = await (await fetch("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        molblock: molblock,
+        dark: prefersDark(),
+        show_indices: el("showIndices").checked,
+        width: 460, height: 290,
+      }),
+    })).json();
+  } catch (e) {
+    msg.innerHTML = '<span class="err">preview unavailable: ' + e.message + "</span>";
+    return;
+  }
+  // A slow response for an older edit must not overwrite a newer one.
+  if (seq !== previewSeq) return;
+
+  if (data.empty) {
+    box.innerHTML = '<span style="color:var(--muted);font-size:.78rem">' +
+      "draw something to see it here</span>";
+    msg.textContent = ""; smi.textContent = "";
+    return;
+  }
+  if (data.error) {
+    msg.innerHTML = '<span class="err">' + data.error + "</span>";
+    return;
+  }
+
+  box.innerHTML = data.svg;
+  smi.textContent = (data.formula ? data.formula + "   " : "") + (data.smiles || "");
+
+  const lines = [];
+  (data.advice || []).forEach((a) => lines.push('<span class="bad">' + a + "</span>"));
+  (data.double_bonds || []).forEach((b) => {
+    const gloss = b.cis_trans ? " (" + b.cis_trans + ")"
+      : " (cis/trans does not apply here)";
+    lines.push("double bond " + b.begin + "-" + b.end + " = " + b.cip + gloss);
+  });
+  if (!lines.length && (data.defined_centers || []).length) {
+    lines.push((data.defined_centers || []).map(
+      (c) => "atom " + c.atom + " = " + c.code).join(", "));
+  }
+  if (!lines.length && (data.constrained_centers || []).length) {
+    lines.push("the grey atoms look stereogenic but the ring system fixes them, " +
+               "so nothing is ambiguous");
+  }
+  msg.innerHTML = lines.join("<br>");
+}
+
+el("showIndices").addEventListener("change", refreshPreview);
+if (window.matchMedia) {
+  window.matchMedia("(prefers-color-scheme: dark)")
+    .addEventListener("change", refreshPreview);
+}
 
 /* ------------------------------------------------------------ path check */
 let pathTimer = null;
@@ -704,6 +851,19 @@ function populateBackends(cfg) {
   el("backendHint").textContent = describeBackend(select.value);
 }
 
+function populateSolvents(cfg) {
+  const select = el("solvent");
+  const options = [
+    '<option value="">auto (water when charged)</option>',
+    '<option value="none">none (gas phase)</option>',
+  ];
+  (cfg.solvents || []).forEach((s) => {
+    const eps = s.dielectric ? "  \u03b5 " + s.dielectric : "";
+    options.push('<option value="' + s.name + '">' + s.name + eps + "</option>");
+  });
+  select.innerHTML = options.join("");
+}
+
 function mountEngine(cfg) {
   engineName = cfg.engine;
   el("engineTag").textContent = cfg.engine ? "editor: " + cfg.engine : "no editor";
@@ -722,6 +882,7 @@ function mountEngine(cfg) {
     'style="width:100%;height:12rem;font-family:ui-monospace,monospace;font-size:.78rem;' +
     'padding:.5rem;border:1px solid var(--border);border-radius:5px;background:var(--field);' +
     'color:var(--fg)"></textarea></div>';
+  el("pasteBox").addEventListener("input", schedulePreview);
   el("stereoTip").innerHTML =
     "<b>Stereochemistry in SMILES:</b> <code>@</code> / <code>@@</code> for centers, " +
     "<code>/</code> and <code>\\</code> for double-bond geometry.";
@@ -736,6 +897,7 @@ async function init() {
   el("filename").value = cfg.defaults.filename || "sketch0";
   if (cfg.defaults.threads) el("threads").value = cfg.defaults.threads;
   populateBackends(cfg);
+  populateSolvents(cfg);
   mountEngine(cfg);
   checkPath();
 }

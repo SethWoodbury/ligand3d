@@ -37,6 +37,7 @@ from .session import (
     inspect_target,
     next_filename,
     run_job,
+    solvent_catalog,
 )
 
 JSME_RELEASE = "JSME_2024-04-29"
@@ -172,6 +173,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 {
                     "engine": self.engine.name if self.engine else None,
                     "backends": backend_catalog(),
+                    "solvents": solvent_catalog(),
                     "defaults": self.defaults,
                 }
             )
@@ -230,11 +232,60 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             self._json(info.to_json())
             return
 
+        if path == "/api/preview":
+            self._preview(self._read_json())
+            return
+
         if path == "/api/build":
             self._start_build(self._read_json())
             return
 
         self._send(404, b"not found", "text/plain")
+
+    def _preview(self, data: dict) -> None:
+        """Render how the drawing is being read, with atom indices.
+
+        Called on every edit, so a half-finished structure must produce an
+        explanation rather than a stack trace or a blank panel.
+        """
+        from ..depict import depict_molblock
+
+        molblock = data.get("molblock") or ""
+        if not molblock.strip():
+            self._json({"empty": True})
+            return
+        try:
+            depiction = depict_molblock(
+                molblock,
+                width=int(data.get("width") or 480),
+                height=int(data.get("height") or 300),
+                dark=bool(data.get("dark")),
+                show_indices=data.get("show_indices", True),
+            )
+        except Ligand3DError as exc:
+            self._json({"error": str(exc)})
+            return
+        except Exception as exc:  # a mid-edit structure can be anything
+            self._json({"error": f"{type(exc).__name__}: {exc}"})
+            return
+
+        payload = depiction.to_json()
+        try:
+            from ..molecule import classify_undefined_stereo, from_molblock
+
+            molecule = from_molblock(molblock)
+            payload["smiles"] = molecule.smiles
+            payload["formula"] = molecule.formula
+            payload["advice"] = classify_undefined_stereo(molecule)
+            payload["double_bonds"] = [
+                {"begin": r.begin, "end": r.end, "cip": r.cip, "cis_trans": r.cis_trans}
+                for r in __import__(
+                    "ligand3d.molecule", fromlist=["describe_double_bonds"]
+                ).describe_double_bonds(molecule)
+            ]
+        except Exception:
+            pass
+        self._json(payload)
 
     def _start_build(self, data: dict) -> None:
         molblock = data.get("molblock") or ""

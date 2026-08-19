@@ -457,6 +457,59 @@ def has_real_stereo_ambiguity(molecule: Molecule) -> bool:
     return count_embeddable_isomers(molecule.mol, limit=2) > 1
 
 
+def classify_undefined_stereo(molecule: Molecule) -> list[str]:
+    """Describe *what kind* of stereochemistry is undefined, not just where.
+
+    "undefined stereocenter at atom 3" sends people hunting for a tetrahedral
+    carbon to put a wedge on. Often that is right. But when two flagged atoms
+    share a ring, the real ambiguity is whether their substituents sit on the
+    same face or opposite faces — a cis/trans ring relationship, which RDKit
+    marks with lowercase CIP descriptors (r/s) for pseudo-asymmetry. A
+    1,3-disubstituted cyclobutane is the classic case, and nothing about it
+    looks like a stereocenter until someone says the word "cis".
+    """
+    undefined = list(molecule.stereo.unassigned_centers)
+    if not undefined:
+        return []
+    if not has_real_stereo_ambiguity(molecule):
+        # Flagged by graph analysis but constrained by the ring system, so there
+        # is nothing for the user to decide and no advice to give.
+        return []
+
+    mol = molecule.mol
+    ring_info = mol.GetRingInfo()
+    descriptions: list[str] = []
+    handled: set[int] = set()
+
+    for ring in ring_info.AtomRings():
+        in_ring = [idx for idx in undefined if idx in ring and idx not in handled]
+        if len(in_ring) < 2:
+            continue
+        handled.update(in_ring)
+        positions = ", ".join(str(i) for i in sorted(in_ring))
+        descriptions.append(
+            f"atoms {positions} sit on the same {len(ring)}-membered ring, so the "
+            f"ambiguity is whether their substituents are on the same face (cis) or "
+            f"opposite faces (trans). Put a wedge on one substituent bond and a wedge "
+            f"or a dash on the other to say which."
+        )
+
+    for idx in undefined:
+        if idx in handled:
+            continue
+        atom = mol.GetAtomWithIdx(idx)
+        where = (
+            f"in a {min(len(r) for r in ring_info.AtomRings() if idx in r)}-membered ring"
+            if atom.IsInRing()
+            else "acyclic"
+        )
+        descriptions.append(
+            f"atom {idx} ({atom.GetSymbol()}, {where}) is a stereocenter with no "
+            f"configuration given. Draw a wedge or a dash on one of its bonds."
+        )
+    return descriptions
+
+
 def require_defined_stereo(molecule: Molecule) -> None:
     """Raise unless every stereogenic element carries an assignment.
 
@@ -470,22 +523,18 @@ def require_defined_stereo(molecule: Molecule) -> None:
     if not has_real_stereo_ambiguity(molecule):
         # Flagged as potential stereocenters, but only one isomer can exist.
         return
-    parts = []
-    if audit.unassigned_centers:
-        atoms = ", ".join(
-            f"atom {i} ({molecule.mol.GetAtomWithIdx(i).GetSymbol()})"
-            for i in audit.unassigned_centers
-        )
-        parts.append(f"undefined stereocenters: {atoms}")
+    parts = list(classify_undefined_stereo(molecule))
     if audit.unassigned_bonds:
         parts.append(
-            "undefined double-bond geometry: "
-            + ", ".join(f"{a}-{b}" for a, b in audit.unassigned_bonds)
+            "undefined double-bond geometry at "
+            + ", ".join(f"bond {a}-{b}" for a, b in audit.unassigned_bonds)
         )
     raise StereoError(
-        "; ".join(parts)
-        + ". Specify it in the drawing or SMILES, or pass '--stereo any' to let RDKit "
-        "pick one arbitrarily, or '--stereo enumerate' to build every isomer."
+        "stereochemistry is undefined. "
+        + " ".join(parts)
+        + " Atom numbers are the order in the file you supplied; the sketcher's "
+        "preview panel labels them. Or pass '--stereo any' to let RDKit pick "
+        "arbitrarily, or '--stereo enumerate' to build every isomer."
     )
 
 

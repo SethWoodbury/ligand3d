@@ -75,7 +75,10 @@ def build(
         help="For a salt or solvate, keep the biggest component instead of refusing.",
     ),
     solvent: Optional[str] = typer.Option(
-        None, "--solvent", help="Implicit solvent for backends that support it, e.g. water."
+        None,
+        "--solvent",
+        help="Implicit solvent (ALPB) for backends that support it. "
+        "Run 'ligand3d solvents' for the list.",
     ),
     no_auto_solvent: bool = typer.Option(
         False,
@@ -482,6 +485,35 @@ def sketch(
         serve(port=port, open_browser=not no_browser, defaults=defaults)
     except Ligand3DError as exc:
         _fail(exc)
+
+
+@app.command()
+def solvents() -> None:
+    """List the implicit solvents ALPB is parameterized for."""
+    from .solvents import NOT_PARAMETERIZED, SOLVENTS
+
+    table = Table(title="ALPB implicit solvents", header_style="bold")
+    table.add_column("name")
+    table.add_column("aliases")
+    table.add_column("dielectric", justify="right")
+    table.add_column("note")
+    for entry in SOLVENTS:
+        table.add_row(
+            entry.name,
+            ", ".join(entry.aliases),
+            f"{entry.dielectric:.1f}" if entry.dielectric else "",
+            entry.note,
+        )
+    console.print(table)
+    console.print(
+        "\n[dim]Available on gfn1, gfn2, and gfnff. The machine-learned potentials "
+        "have no implicit solvent model at all.[/dim]"
+    )
+    console.print(
+        "[dim]Not parameterized (nearest stand-in shown): "
+        + ", ".join(f"{k} -> {v}" for k, v in list(NOT_PARAMETERIZED.items())[:6])
+        + ", ...[/dim]"
+    )
 
 
 @app.command()

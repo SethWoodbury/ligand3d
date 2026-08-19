@@ -87,6 +87,37 @@ ligand3d build "NCC1(CC(=O)O)CCCCC1" --backend mmff94,gfn2
 `ligand3d backends` lists what is registered; `ligand3d doctor` says which ones can
 actually run here and what to install for the rest.
 
+## Implicit solvent
+
+`gfn1`, `gfn2`, and `gfnff` support ALPB implicit solvation with 25 parameterized
+solvents. `ligand3d solvents` lists them with dielectric constants:
+
+```bash
+ligand3d build "<smiles>" --backend gfn2 --solvent dmso
+ligand3d build "<smiles>" --backend gfn2 --solvent woctanol   # the logP phase
+ligand3d solvents
+```
+
+water, methanol, ethanol, acetonitrile, dmso, dmf, acetone, thf, dichloromethane,
+chloroform, ethylacetate, diethylether, dioxane, toluene, benzene, hexane, hexadecane,
+octanol, woctanol, phenol, aniline, benzaldehyde, nitromethane, furane, carbondisulfide —
+plus the aliases `h2o`, `ch2cl2`, `chcl3`, `ether`, `cs2`.
+
+Solvent names are validated before any work starts, because tblite rejects an unknown one
+with a message that does not say what the alternatives are. **Cyclohexane, octane and
+heptane are not in the ALPB table** despite being obvious things to reach for, so asking
+for them names the nearest stand-in instead of just failing:
+
+```console
+$ ligand3d build "CC(=O)O" --backend gfn2 --solvent cyclohexane
+error: ALPB has no parameters for 'cyclohexane'. The closest available solvent
+is 'hexane'. Run 'ligand3d solvents' for the full list.
+```
+
+Water is still applied automatically to charged and zwitterionic species unless you pass
+`--solvent none`. The machine-learned potentials have no implicit solvent model at all,
+which is why they are the wrong tool for a zwitterion regardless of charge handling.
+
 ## Machine-learned force fields
 
 **On this cluster the checkpoints live in `/net/databases/huggingface/mlFF_models/`, and
@@ -227,6 +258,38 @@ graph, then the run log. Both the editor and the log grow to fill the window.
 - **A run log** reporting stereocenters with R/S, double bonds with E/Z and cis/trans,
   warnings such as more than one fragment, any error in full, per-method timing, the total
   time, and every file written. There is a Copy button.
+
+### Seeing how your drawing is read
+
+Under the editor is a live panel showing the molecule **as ligand3d parses it**, redrawn
+by RDKit with every atom numbered, updating as you draw.
+
+This exists because of one specific failure. When the pipeline says
+
+```
+2 stereocenter(s) left undefined: atom 4, atom 6
+```
+
+those numbers index the file your sketcher emitted, and there is no way to tell from the
+canvas which atoms they are — the same molecule drawn twice can even number differently.
+The panel makes the number point at something you can see. Atoms are colour-coded:
+
+- **amber** — needs a configuration from you
+- **green** — already specified, with its R/S annotation
+- **grey** — looks stereogenic to a graph analysis but is fixed by the ring system, so
+  there is nothing to decide
+
+Atom numbering can be toggled off, and the panel follows your light or dark theme.
+
+The messages also say *what kind* of stereochemistry is missing, which is often not what
+you would guess. Two flagged atoms on the same ring are not two independent wedges to
+draw — they are one cis/trans relationship:
+
+```
+atoms 3, 5 sit on the same 4-membered ring, so the ambiguity is whether their
+substituents are on the same face (cis) or opposite faces (trans). Put a wedge on
+one substituent bond and a wedge or a dash on the other to say which.
+```
 
 ### Drawing stereochemistry — wedges *and* dashes
 
@@ -377,6 +440,10 @@ molecule.
 [ASE](https://wiki.fysik.dtu.dk/ase/) (optimizers),
 [JSME](https://jsme-editor.github.io/) and
 [Ketcher](https://github.com/epam/ketcher) (2D sketchers).
+
+## Author
+
+Seth M. Woodbury — [github.com/SethWoodbury](https://github.com/SethWoodbury)
 
 ## License
 

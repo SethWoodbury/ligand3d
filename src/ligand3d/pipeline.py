@@ -166,7 +166,11 @@ def resolve_solvent(molecule: Molecule, settings: Settings, supports_solvation: 
     can honour it.
     """
     if settings.solvent:
-        return settings.solvent
+        from .solvents import validate
+
+        # Checked here rather than at the calculator, which rejects an unknown
+        # name with a message that does not say what the valid ones are.
+        return validate(settings.solvent)
     if not settings.auto_solvent or not supports_solvation:
         return None
     return proton_mod.suggest_solvent(molecule)

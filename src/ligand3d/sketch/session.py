@@ -454,6 +454,21 @@ def _settings_from_json(data: dict[str, Any]):
     )
 
 
+def solvent_catalog() -> list[dict[str, Any]]:
+    """The ALPB solvent table, for the page's dropdown."""
+    from ..solvents import SOLVENTS
+
+    return [
+        {
+            "name": s.name,
+            "aliases": list(s.aliases),
+            "dielectric": s.dielectric,
+            "note": s.note,
+        }
+        for s in SOLVENTS
+    ]
+
+
 def backend_catalog() -> list[dict[str, Any]]:
     """Every registered backend with its capabilities and whether it can run."""
     from ..minimize import all_backends
