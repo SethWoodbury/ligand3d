@@ -87,14 +87,34 @@ class TestMacePolar:
         assert "mace-polar" not in UNSUPPORTED_MODELS
 
     def test_availability_explains_the_fork_requirement(self):
+        """However it is unavailable, the hint must name the fork.
+
+        The reason varies with what is missing: with no torch at all the module
+        check fires first and says so, and only once mace is present does the
+        graph_longrange check get a chance. The hint is the POLAR-specific part
+        and is what actually tells someone what to do.
+        """
         import importlib.util
 
         backend = get_backend("mace-polar")
         availability = backend.available()
-        if importlib.util.find_spec("graph_longrange") is None:
-            assert not availability
-            assert "graph_longrange" in availability.reason
-            assert "separate venv" in availability.hint
+        if importlib.util.find_spec("graph_longrange") is not None:
+            return  # the fork is installed here; nothing to explain
+        assert not availability
+        assert availability.reason
+        assert "separate venv" in availability.hint
+        assert "graph_longrange" in availability.hint
+
+    def test_graph_longrange_is_the_reason_once_mace_is_present(self):
+        """With stock mace installed, the specific missing piece is named."""
+        import importlib.util
+
+        if importlib.util.find_spec("mace") is None:
+            pytest.skip("mace not installed")
+        if importlib.util.find_spec("graph_longrange") is not None:
+            pytest.skip("the POLAR fork is installed here")
+        availability = get_backend("mace-polar").available()
+        assert "graph_longrange" in availability.reason
 
     def test_weights_resolve_on_this_machine(self):
         from ligand3d.config import find_model_weights
@@ -131,23 +151,30 @@ class TestPackaging:
     """The extras are mutually exclusive; uv has to be told, or CI fails."""
 
     @staticmethod
-    def _pyproject() -> dict:
+    def _text() -> str:
+        """Read pyproject as text.
+
+        Deliberately not parsed: tomllib only exists from 3.11, and this suite
+        runs on 3.10 too. These are presence checks, so text is enough.
+        """
         import pathlib
-        import tomllib
 
         root = pathlib.Path(__file__).resolve().parents[1]
-        return tomllib.loads((root / "pyproject.toml").read_text())
+        return (root / "pyproject.toml").read_text()
 
     def test_the_conflict_is_declared(self):
-        conflicts = self._pyproject()["tool"]["uv"]["conflicts"]
-        pairs = {frozenset(entry["extra"] for entry in group) for group in conflicts}
-        assert frozenset({"mace", "fairchem"}) in pairs
+        text = self._text()
+        assert "[tool.uv]" in text
+        assert "conflicts" in text
+        assert 'extra = "mace"' in text and 'extra = "fairchem"' in text
 
     def test_fairchem_is_gated_by_python_version(self):
         """fairchem-core supports 3.11-3.13 while ligand3d runs on 3.10+."""
-        extras = self._pyproject()["project"]["optional-dependencies"]
-        entry = next(d for d in extras["fairchem"] if d.startswith("fairchem-core"))
-        assert "python_version" in entry
+        text = self._text()
+        line = next(
+            ln for ln in text.splitlines() if ln.strip().startswith('"fairchem-core')
+        )
+        assert "python_version" in line
 
     def test_ci_never_lets_uv_re_resolve(self):
         """`uv run` re-syncs from pyproject and tries to satisfy every extra."""
