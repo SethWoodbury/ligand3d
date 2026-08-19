@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        # The Ketcher submodule is ~380 MB and nothing in the test suite needs
+        # it, so CI checks out the superproject only.
+        with:
+          submodules: false
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install with the semi-empirical and protonation extras
+        # The ML potentials are deliberately excluded: they pull multi-gigabyte
+        # torch wheels and their backends skip cleanly when absent.
+        run: |
+          uv venv --python ${{ matrix.python-version }}
+          uv pip install -e ".[dev,xtb,protonation]"
+
+      - name: Run tests
+        run: uv run pytest -q
+
+  core-only:
+    # The core install must stand on its own: someone who wants nothing but
+    # 2D -> 3D and MMFF94 should not need tblite, dimorphite-dl, or torch.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: astral-sh/setup-uv@v5
+      - run: uv venv --python 3.12
+      - run: uv pip install -e ".[dev]"
+      - run: uv run pytest -q
+      - name: Build both target molecules with no optional dependencies
+        run: |
+          uv run ligand3d build "O=C1CN2CCC1CC2" -o quinuclidinone.pdb
+          uv run ligand3d build "NCC1(CC(=O)O)CCCCC1" -o gabapentin.pdb
+          test -s quinuclidinone.pdb
+          test -s gabapentin.pdb
+      - name: Doctor should report cleanly even with nothing optional installed
+        run: uv run ligand3d doctor
