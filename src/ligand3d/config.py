@@ -168,6 +168,23 @@ _XTB_LIB_PROBE = [
     Path("/home/woodbuse/conda/envs/qcb-xtb/lib"),
 ]
 
+# Rosetta's molfile_to_params.py. It imports a sibling `rosetta_py` package via
+# sys.path[0], so it must be invoked at its real location rather than copied.
+_MOLFILE_TO_PARAMS_PROBE = [
+    Path("/net/software/rosetta/main/source/scripts/python/public/molfile_to_params.py"),
+    Path("/net/software/rosetta/latest/source/scripts/python/public/molfile_to_params.py"),
+]
+_ROSETTA_RESIDUE_TYPES_PROBE = [
+    Path(
+        "/net/software/rosetta/main/database/chemical/residue_type_sets/"
+        "fa_standard/residue_types.txt"
+    ),
+    Path(
+        "/net/software/rosetta/latest/database/chemical/residue_type_sets/"
+        "fa_standard/residue_types.txt"
+    ),
+]
+
 
 @dataclass
 class Resolution:
@@ -267,6 +284,51 @@ def resolve_binary(name: str, probes: list[Path]) -> Resolution:
     return res
 
 
+def resolve_file(name: str, probes: list[Path], config_section: str) -> Resolution:
+    """Locate a data file (not an executable) through the usual search order."""
+    res = Resolution(key=name)
+
+    env_name = _env_key(name)
+    res.tried.append(f"${env_name}")
+    env = os.environ.get(env_name)
+    if env:
+        p = Path(env).expanduser()
+        if p.exists():
+            res.path, res.via = p, f"${env_name}"
+            return res
+
+    cfg = load_config().get(config_section, {})
+    res.tried.append(f"{CONFIG_PATH}:[{config_section}].{name}")
+    if name in cfg:
+        p = Path(str(cfg[name])).expanduser()
+        if p.exists():
+            res.path, res.via = p, "config.toml"
+            return res
+
+    for candidate in probes:
+        res.tried.append(str(candidate))
+        if candidate.exists():
+            res.path, res.via = candidate, "probe"
+            return res
+    return res
+
+
+def resolve_molfile_to_params() -> Resolution:
+    return resolve_file("molfile_to_params", _MOLFILE_TO_PARAMS_PROBE, "rosetta")
+
+
+def resolve_rosetta_residue_types() -> Resolution:
+    return resolve_file("rosetta_residue_types", _ROSETTA_RESIDUE_TYPES_PROBE, "rosetta")
+
+
+def find_molfile_to_params() -> Path | None:
+    return resolve_molfile_to_params().path
+
+
+def find_rosetta_residue_types() -> Path | None:
+    return resolve_rosetta_residue_types().path
+
+
 def resolve_xtb() -> Resolution:
     return resolve_binary("xtb", _XTB_PROBE)
 
@@ -351,6 +413,10 @@ def write_default_config(path: Path | None = None) -> Path:
 # xtb     = "/path/to/xtb"
 # crest   = "/path/to/crest"
 # xtb_lib = "/path/to/env/lib"   # extra LD_LIBRARY_PATH for a conda-built xtb
+
+[rosetta]
+# molfile_to_params      = "/path/to/rosetta/.../public/molfile_to_params.py"
+# rosetta_residue_types  = "/path/to/rosetta/.../fa_standard/residue_types.txt"
 
 [sketch]
 # jsme_dir = "/path/to/JSME"   # auto-downloaded if absent

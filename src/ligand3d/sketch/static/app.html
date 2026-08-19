@@ -6,17 +6,19 @@
 <title>ligand3d</title>
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #ffffff; --fg: #16181d; --muted: #5c6370;
-    --border: #dcdfe5; --accent: #2f6f4f; --accent-fg: #ffffff;
-    --field: #ffffff; --ok: #1e7a4d; --warn: #9a6512; --err: #b3352b;
-    --logbg: #fbfbfc;
+    --bg: #f4f6f8; --panel: #ffffff; --fg: #15181d; --muted: #5a6270;
+    --border: #dbdfe6; --line: #eaedf1;
+    --accent: #2f6f4f; --accent-fg: #ffffff; --field: #ffffff;
+    --ok: #1c7a4a; --warn: #93610f; --err: #b32f26; --soft: #f8f9fb;
+    --c1: #2f6f4f; --c2: #2f5d8c; --c3: #8c4a9e; --c4: #9c5a1f;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #101216; --panel: #181b21; --fg: #e8eaee; --muted: #98a0ac;
-      --border: #2b3038; --accent: #4c9a72; --accent-fg: #0b0d10;
-      --field: #14171c; --ok: #55b784; --warn: #d9a13c; --err: #e2695e;
-      --logbg: #12151a;
+      --bg: #0f1115; --panel: #171a20; --fg: #e7eaef; --muted: #98a1ad;
+      --border: #292f38; --line: #22272f;
+      --accent: #4c9a72; --accent-fg: #0a0c0f; --field: #12151a;
+      --ok: #55b784; --warn: #d6a03d; --err: #e46a5f; --soft: #12151a;
+      --c1: #56b585; --c2: #6fa8dc; --c3: #c08ad6; --c4: #d69a55;
     }
   }
   * { box-sizing: border-box; }
@@ -26,88 +28,110 @@
     font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     display: flex; flex-direction: column;
   }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
   header {
-    display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap;
-    padding: .65rem 1rem; background: var(--panel);
+    display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+    padding: .55rem .9rem; background: var(--panel);
     border-bottom: 1px solid var(--border); flex: none;
   }
-  h1 { font-size: 1rem; margin: 0; font-weight: 660; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: .82rem; }
-  .grow { flex: 1; }
-  .engine {
-    font-size: .72rem; color: var(--muted); border: 1px solid var(--border);
-    padding: .12rem .45rem; border-radius: 99px; font-family: ui-monospace, monospace;
+  h1 { font-size: .95rem; margin: 0; font-weight: 680; letter-spacing: -0.01em; }
+  .tag {
+    font-size: .7rem; color: var(--muted); border: 1px solid var(--border);
+    padding: .1rem .42rem; border-radius: 99px; font-family: ui-monospace, monospace;
   }
+  .grow { flex: 1; }
+  .primary, .ghost {
+    font: inherit; font-weight: 640; cursor: pointer; font-size: .84rem;
+    padding: .44rem .95rem; border-radius: 6px; border: 1px solid transparent;
+    background: var(--accent); color: var(--accent-fg);
+  }
+  .ghost { background: transparent; color: var(--fg); border-color: var(--border); }
+  .primary:disabled, .ghost:disabled { opacity: .45; cursor: default; }
+  #status { font-size: .8rem; color: var(--muted); }
 
   main {
-    flex: 1; display: grid; gap: 1rem; padding: 1rem;
-    grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
-    align-items: start; min-height: 0;
+    flex: 1; display: grid; gap: .75rem; padding: .75rem;
+    grid-template-columns: minmax(0, 1.15fr) minmax(390px, 0.85fr);
+    min-height: 0;
   }
-  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 1080px) { main { grid-template-columns: 1fr; } }
+  .col { display: flex; flex-direction: column; gap: .75rem; min-width: 0; min-height: 0; }
 
   .card {
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 10px; padding: .9rem 1rem;
+    border-radius: 9px; padding: .7rem .85rem; min-width: 0;
   }
-  .card h2 {
-    font-size: .78rem; text-transform: uppercase; letter-spacing: .06em;
-    color: var(--muted); margin: 0 0 .7rem; font-weight: 650;
+  .card > h2 {
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 .55rem; font-weight: 680;
   }
-  .stack { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+  .card.flush { padding: 0; overflow: hidden; }
+  .card.tall { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
-  #canvasCard { display: flex; flex-direction: column; gap: .7rem; }
-  #sketchHost { min-height: 420px; }
+  #sketchHost { min-height: 430px; }
   .tip {
-    color: var(--muted); font-size: .8rem; background: var(--logbg);
-    border: 1px solid var(--border); border-radius: 6px; padding: .5rem .65rem;
+    color: var(--muted); font-size: .78rem; background: var(--soft);
+    border-top: 1px solid var(--line); padding: .5rem .85rem; margin: 0;
   }
-  .tip b { color: var(--fg); font-weight: 620; }
+  .tip b { color: var(--fg); font-weight: 640; }
+  .tip code { background: var(--panel); padding: 0 .2rem; border-radius: 3px; }
 
-  label { display: block; font-size: .8rem; font-weight: 600; margin-bottom: .28rem; }
-  .row { display: grid; gap: .6rem; margin-bottom: .7rem; }
+  .tabs { display: flex; gap: .1rem; border-bottom: 1px solid var(--border); margin: -.1rem 0 .7rem; }
+  .tabs button {
+    font: inherit; font-size: .78rem; font-weight: 620; cursor: pointer;
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    color: var(--muted); padding: .35rem .6rem;
+  }
+  .tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+  .pane { display: none; }
+  .pane[data-active="true"] { display: block; }
+
+  label { display: block; font-size: .76rem; font-weight: 620; margin-bottom: .22rem; }
+  .row { display: grid; gap: .5rem; margin-bottom: .55rem; }
   .row.two { grid-template-columns: 1fr 1fr; }
-  .row.pathrow { grid-template-columns: 1fr 12rem; }
-  @media (max-width: 560px) { .row.two, .row.pathrow { grid-template-columns: 1fr; } }
+  .row.split { grid-template-columns: 1fr 11rem; }
+  @media (max-width: 520px) { .row.two, .row.split { grid-template-columns: 1fr; } }
 
   input[type=text], input[type=number], select {
-    width: 100%; font: inherit; font-size: .86rem; padding: .42rem .55rem;
-    border: 1px solid var(--border); border-radius: 6px;
+    width: 100%; font: inherit; font-size: .82rem; padding: .36rem .5rem;
+    border: 1px solid var(--border); border-radius: 5px;
     background: var(--field); color: var(--fg);
   }
   input[type=text], select { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .checks { display: flex; flex-wrap: wrap; gap: .45rem 1.1rem; margin: .2rem 0 .7rem; }
+  .checks { display: flex; flex-wrap: wrap; gap: .35rem 1rem; margin: .1rem 0 .55rem; }
   .checks label {
-    display: flex; align-items: center; gap: .38rem; margin: 0;
-    font-weight: 450; font-size: .82rem; cursor: pointer;
+    display: flex; align-items: center; gap: .35rem; margin: 0;
+    font-weight: 440; font-size: .8rem; cursor: pointer;
   }
   .checks input { margin: 0; }
-  .hint { color: var(--muted); font-size: .76rem; margin: -.35rem 0 .7rem; }
-
-  .actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-  button {
-    font: inherit; font-weight: 620; cursor: pointer; font-size: .86rem;
-    padding: .5rem 1rem; border-radius: 6px;
-    border: 1px solid transparent; background: var(--accent); color: var(--accent-fg);
-  }
-  button.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
-  button:disabled { opacity: .5; cursor: default; }
+  .note { color: var(--muted); font-size: .74rem; margin: -.3rem 0 .55rem; }
 
   #pathPreview {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: .78rem; color: var(--muted); word-break: break-all;
-    border-left: 2px solid var(--border); padding-left: .6rem; margin: -.2rem 0 .8rem;
+    font-size: .74rem; color: var(--muted); word-break: break-all;
+    border-left: 2px solid var(--border); padding-left: .55rem; margin: 0 0 .6rem;
+    white-space: pre-wrap;
   }
   #pathPreview .warn { color: var(--warn); }
-  #pathPreview .err { color: var(--err); }
-  #pathPreview .ok { color: var(--ok); }
+  #pathPreview .err  { color: var(--err); }
+
+  #plotCard { display: none; }
+  #plot { width: 100%; height: 190px; display: block; }
+  #plot text { font: 10px ui-monospace, monospace; fill: var(--muted); }
+  #plot .grid { stroke: var(--line); stroke-width: 1; }
+  #plot .axis { stroke: var(--border); stroke-width: 1; }
+  .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .74rem; margin-top: .3rem; }
+  .legend span { display: flex; align-items: center; gap: .3rem; color: var(--muted); }
+  .swatch { width: .7rem; height: .18rem; border-radius: 2px; display: inline-block; }
+  #plotHint { font-size: .72rem; color: var(--muted); margin-top: .35rem; }
 
   #log {
-    background: var(--logbg); border: 1px solid var(--border); border-radius: 6px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem;
-    padding: .6rem .7rem; height: 15rem; overflow-y: auto; white-space: pre-wrap;
-    word-break: break-word;
+    background: var(--soft); border-top: 1px solid var(--line);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .755rem;
+    padding: .55rem .85rem; flex: 1; overflow-y: auto; white-space: pre-wrap;
+    word-break: break-word; min-height: 9rem;
   }
   #log .line { display: block; }
   #log .info  { color: var(--fg); }
@@ -115,168 +139,223 @@
   #log .ok    { color: var(--ok); }
   #log .warn  { color: var(--warn); }
   #log .error { color: var(--err); }
-  #log .rule  { color: var(--muted); opacity: .6; }
+  #log .rule  { color: var(--muted); opacity: .55; }
+  .loghead { display: flex; align-items: center; gap: .5rem; padding: .55rem .85rem .5rem; }
+  .loghead h2 {
+    margin: 0; font-size: .7rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); font-weight: 680;
+  }
 
   dialog {
-    border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
-    color: var(--fg); max-width: 34rem; padding: 1.1rem 1.2rem;
+    border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
+    color: var(--fg); max-width: 34rem; padding: 1rem 1.15rem;
   }
   dialog::backdrop { background: rgba(0,0,0,.45); }
-  dialog p { margin: .4rem 0 .9rem; }
   dialog ul {
-    margin: 0 0 1rem; padding-left: 1.1rem;
-    font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all;
+    margin: .5rem 0 1rem; padding-left: 1.05rem;
+    font-family: ui-monospace, monospace; font-size: .78rem; word-break: break-all;
   }
+  .actions { display: flex; gap: .45rem; flex-wrap: wrap; align-items: center; }
 </style>
 </head>
 <body>
 <header>
   <h1>ligand3d</h1>
-  <span class="sub">draw a 2D molecule &rarr; minimized 3D structure</span>
+  <span class="tag" id="engineTag">loading…</span>
   <span class="grow"></span>
-  <span class="engine" id="engineTag">loading…</span>
+  <span id="status"></span>
+  <button class="ghost" id="clearBtn">Clear canvas</button>
+  <button class="primary" id="buildBtn" disabled>Build 3D structure</button>
 </header>
 
 <main>
-  <section class="card" id="canvasCard">
-    <h2>Structure</h2>
-    <div id="sketchHost"></div>
-    <div class="tip" id="stereoTip">
-      <b>Stereocenters:</b> pick the wedge-bond tool, then click a bond to make it a
-      solid wedge. <b>Click the same bond again to turn it into a dashed (hashed) bond</b> —
-      the tool cycles wedge &rarr; dash &rarr; plain. A wedge and a dash on the same
-      drawing give opposite R/S assignments.
-    </div>
-    <div class="actions">
-      <button id="buildBtn" disabled>Build 3D structure</button>
-      <button id="clearBtn" class="ghost">Clear canvas</button>
-      <span class="sub" id="canvasStatus"></span>
-    </div>
-  </section>
+  <div class="col">
+    <section class="card flush tall">
+      <div id="sketchHost"></div>
+      <p class="tip" id="stereoTip">
+        <b>Wedges and dashes:</b> pick the wedge-bond tool, then click a bond for a solid
+        wedge and <b>click the same bond again for a dashed (hashed) bond</b> — the tool
+        cycles wedge&nbsp;&rarr;&nbsp;dash&nbsp;&rarr;&nbsp;plain. A wedge and a dash give
+        opposite R/S. Double-bond geometry is read as <code>E</code>/<code>Z</code>
+        automatically.
+      </p>
+    </section>
+  </div>
 
-  <div class="stack">
+  <div class="col">
     <section class="card">
-      <h2>Output</h2>
-      <div class="row pathrow">
-        <div>
-          <label for="directory">Directory</label>
-          <input type="text" id="directory" spellcheck="false">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="out" aria-selected="true">Output</button>
+        <button role="tab" data-tab="min" aria-selected="false">Minimize</button>
+        <button role="tab" data-tab="chem" aria-selected="false">Chemistry</button>
+        <button role="tab" data-tab="rosetta" aria-selected="false">Rosetta</button>
+      </div>
+
+      <div class="pane" data-pane="out" data-active="true">
+        <div class="row split">
+          <div>
+            <label for="directory">Directory</label>
+            <input type="text" id="directory" spellcheck="false">
+          </div>
+          <div>
+            <label for="filename">Base name</label>
+            <input type="text" id="filename" spellcheck="false">
+          </div>
         </div>
-        <div>
-          <label for="filename">Filename</label>
-          <input type="text" id="filename" spellcheck="false">
+        <div id="pathPreview">&hellip;</div>
+        <label>Formats</label>
+        <div class="checks">
+          <label><input type="checkbox" id="fmt_cif" checked> mmCIF</label>
+          <label><input type="checkbox" id="fmt_sdf" checked> SDF</label>
+          <label><input type="checkbox" id="fmt_pdb"> PDB</label>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" id="autoname" checked> auto-increment the name after each build</label>
+        </div>
+        <div class="row two">
+          <div>
+            <label for="resname">Residue name</label>
+            <input type="text" id="resname" maxlength="3" placeholder="LIG">
+          </div>
+          <div>
+            <label for="threads">Threads</label>
+            <input type="number" id="threads" min="1" max="64" value="4">
+          </div>
         </div>
       </div>
-      <div id="pathPreview">…</div>
-      <div class="checks">
-        <label><input type="checkbox" id="write_sdf" checked> also write .sdf sidecar</label>
-        <label><input type="checkbox" id="autoname" checked> auto-increment name after each build</label>
-      </div>
-      <div class="row two">
-        <div>
-          <label for="resname">PDB residue name</label>
-          <input type="text" id="resname" maxlength="3" placeholder="LIG">
+
+      <div class="pane" data-pane="min">
+        <div class="row">
+          <div>
+            <label for="backend">Backend chain</label>
+            <select id="backend"></select>
+          </div>
         </div>
-        <div>
-          <label for="threads">Threads</label>
-          <input type="number" id="threads" min="1" max="64" value="4">
+        <div class="note" id="backendHint"></div>
+        <div class="row two">
+          <div>
+            <label for="solvent">Implicit solvent</label>
+            <select id="solvent">
+              <option value="">auto (water when charged)</option>
+              <option value="water">water</option>
+              <option value="none">none (gas phase)</option>
+            </select>
+          </div>
+          <div>
+            <label for="max_steps">Max steps</label>
+            <input type="number" id="max_steps" min="1" max="20000" value="500">
+          </div>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" id="trace"> log energy at every step (slower)</label>
+          <label><input type="checkbox" id="trajectory"> save the step-by-step geometry</label>
+        </div>
+        <div class="note">
+          Tracing draws the curve below and reports the change per step. The trajectory is
+          written as <code>&lt;name&gt;_traj.pdb</code>, one MODEL per step.
+        </div>
+      </div>
+
+      <div class="pane" data-pane="chem">
+        <div class="row two">
+          <div>
+            <label for="protonation">Protonation</label>
+            <select id="protonation">
+              <option value="as-drawn">as drawn</option>
+              <option value="ph">assign at pH</option>
+              <option value="enumerate">enumerate states at pH</option>
+            </select>
+          </div>
+          <div>
+            <label for="ph">pH</label>
+            <input type="number" id="ph" step="0.1" min="-2" max="16" value="7.4" disabled>
+          </div>
+        </div>
+        <div class="row two">
+          <div>
+            <label for="n_confs">Conformers</label>
+            <input type="number" id="n_confs" min="1" max="2000" value="1">
+          </div>
+          <div>
+            <label for="conf_method">Search</label>
+            <select id="conf_method">
+              <option value="rdkit">rdkit (seconds)</option>
+              <option value="crest">crest (minutes)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row two">
+          <div>
+            <label for="energy_window">Energy window</label>
+            <input type="number" id="energy_window" step="0.5" min="0" placeholder="none">
+          </div>
+          <div>
+            <label for="stereo_mode">Undefined stereo</label>
+            <select id="stereo_mode">
+              <option value="require">refuse to guess</option>
+              <option value="any">pick one</option>
+              <option value="enumerate">build all isomers</option>
+            </select>
+          </div>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" id="largest_fragment"> largest fragment only</label>
+          <label><input type="checkbox" id="allow_charge_mismatch"> allow charge mismatch</label>
+          <label><input type="checkbox" id="allow_proton_transfer"> allow proton transfer</label>
+        </div>
+      </div>
+
+      <div class="pane" data-pane="rosetta">
+        <div class="checks">
+          <label><input type="checkbox" id="params"> generate a Rosetta params file</label>
+        </div>
+        <div class="row two">
+          <div>
+            <label for="params_code">Ligand code</label>
+            <input type="text" id="params_code" maxlength="3" placeholder="LIG">
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <div class="checks" style="margin:0">
+              <label><input type="checkbox" id="allow_code_conflict"> allow existing code</label>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          Runs Rosetta's <code>molfile_to_params.py</code>. Extra conformers become the
+          rotamer library, and the code is checked against Rosetta's
+          <code>residue_types.txt</code> first. No PDB is needed &mdash; the SDF is fed
+          straight in.
         </div>
       </div>
     </section>
 
-    <section class="card">
-      <h2>Minimization</h2>
-      <div class="row">
-        <div>
-          <label for="backend">Backend chain</label>
-          <select id="backend"></select>
-        </div>
-      </div>
-      <div class="hint" id="backendHint"></div>
-      <div class="row two">
-        <div>
-          <label for="solvent">Implicit solvent</label>
-          <select id="solvent">
-            <option value="">auto (water when charged)</option>
-            <option value="water">water</option>
-            <option value="none">none (gas phase)</option>
-          </select>
-        </div>
-        <div>
-          <label for="max_steps">Max optimizer steps</label>
-          <input type="number" id="max_steps" min="1" max="20000" value="500">
-        </div>
-      </div>
+    <section class="card" id="plotCard">
+      <h2>Energy per step</h2>
+      <svg id="plot" preserveAspectRatio="none" role="img" aria-label="energy versus optimizer step"></svg>
+      <div class="legend" id="plotLegend"></div>
+      <div id="plotHint"></div>
     </section>
 
-    <section class="card">
-      <h2>Protonation</h2>
-      <div class="row two">
-        <div>
-          <label for="protonation">Mode</label>
-          <select id="protonation">
-            <option value="as-drawn">as drawn (no change)</option>
-            <option value="ph">assign at pH</option>
-            <option value="enumerate">enumerate all states at pH</option>
-          </select>
-        </div>
-        <div>
-          <label for="ph">pH</label>
-          <input type="number" id="ph" step="0.1" min="-2" max="16" value="7.4" disabled>
-        </div>
+    <section class="card flush tall">
+      <div class="loghead">
+        <h2>Run log</h2>
+        <span class="grow"></span>
+        <button class="ghost" id="copyLog" style="padding:.2rem .5rem;font-size:.72rem">Copy</button>
       </div>
-    </section>
-
-    <section class="card">
-      <h2>Conformers &amp; stereo</h2>
-      <div class="row two">
-        <div>
-          <label for="n_confs">Conformers to keep</label>
-          <input type="number" id="n_confs" min="1" max="2000" value="1">
-        </div>
-        <div>
-          <label for="conf_method">Search method</label>
-          <select id="conf_method">
-            <option value="rdkit">rdkit (ETKDG, seconds)</option>
-            <option value="crest">crest (metadynamics, minutes)</option>
-          </select>
-        </div>
-      </div>
-      <div class="row two">
-        <div>
-          <label for="energy_window">Energy window (kcal/mol)</label>
-          <input type="number" id="energy_window" step="0.5" min="0" placeholder="none">
-        </div>
-        <div>
-          <label for="stereo_mode">Undefined stereocenters</label>
-          <select id="stereo_mode">
-            <option value="require">refuse to guess</option>
-            <option value="any">let RDKit pick one</option>
-            <option value="enumerate">build every isomer</option>
-          </select>
-        </div>
-      </div>
-      <div class="checks">
-        <label><input type="checkbox" id="largest_fragment"> keep largest fragment only</label>
-        <label><input type="checkbox" id="allow_charge_mismatch"> allow charge mismatch</label>
-        <label><input type="checkbox" id="allow_proton_transfer"> allow proton transfer</label>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>Run log</h2>
       <div id="log"><span class="line muted">nothing built yet.</span></div>
     </section>
   </div>
 </main>
 
 <dialog id="confirmDialog">
-  <h2 style="margin:0 0 .2rem;font-size:1rem">Overwrite existing files?</h2>
-  <p class="sub" id="confirmBody">These files already exist and would be replaced:</p>
+  <h2 style="margin:0;font-size:.98rem">Overwrite existing files?</h2>
+  <p style="color:var(--muted);font-size:.83rem;margin:.35rem 0 0">
+    These already exist and would be replaced:</p>
   <ul id="confirmList"></ul>
   <div class="actions">
-    <button id="confirmYes">Overwrite</button>
-    <button id="confirmNo" class="ghost">Cancel</button>
+    <button class="primary" id="confirmYes">Overwrite</button>
+    <button class="ghost" id="confirmNo">Cancel</button>
   </div>
 </dialog>
 
@@ -286,34 +365,37 @@
 const el = (id) => document.getElementById(id);
 const logBox = el("log");
 const buildBtn = el("buildBtn");
+const STAGE_COLORS = ["--c1", "--c2", "--c3", "--c4"];
 
 let engineName = null;
 let jsmeApplet = null;
 let polling = null;
 let backends = [];
 
-/* ---------------------------------------------------------------- logging */
+/* ------------------------------------------------------------------ log */
 let logStarted = false;
-function logLine(text, level = "info") {
+function logLine(text, level) {
   if (!logStarted) { logBox.textContent = ""; logStarted = true; }
   const span = document.createElement("span");
-  span.className = "line " + level;
+  span.className = "line " + (level || "info");
   span.textContent = text;
   logBox.appendChild(span);
   logBox.scrollTop = logBox.scrollHeight;
 }
 function logRule(label) {
-  logLine("── " + label + " " + "─".repeat(Math.max(0, 46 - label.length)), "rule");
+  logLine("-- " + label + " " + "-".repeat(Math.max(0, 44 - label.length)), "rule");
 }
+function setStatus(text) { el("status").textContent = text; }
 
-/* ------------------------------------------------------------ the editor */
-// One dispatcher for all three editors, so nothing has to be monkey-patched
-// once we know which one mounted.
+el("copyLog").addEventListener("click", () => {
+  navigator.clipboard.writeText(logBox.innerText).then(
+    () => setStatus("log copied"), () => setStatus("could not copy"));
+});
+
+/* --------------------------------------------------------------- editor */
 async function readMolblock() {
   if (engineName === "jsme") {
-    if (!jsmeApplet) return "";
-    // smiles() is the cheapest way to ask "is the canvas empty?"
-    if (!jsmeApplet.smiles()) return "";
+    if (!jsmeApplet || !jsmeApplet.smiles()) return "";
     return jsmeApplet.molFile(false);
   }
   if (engineName === "paste") {
@@ -323,85 +405,89 @@ async function readMolblock() {
   return "";
 }
 
-
 function clearCanvas() {
   if (engineName === "jsme" && jsmeApplet) jsmeApplet.reset();
-  if (engineName === "paste") {
-    const box = el("pasteBox");
-    if (box) box.value = "";
-  }
-  el("canvasStatus").textContent = "";
+  if (engineName === "paste") { const b = el("pasteBox"); if (b) b.value = ""; }
+  setStatus("");
 }
 
-// JSME calls this global when its bundle has booted.
 window.jsmeOnLoad = function () {
-  jsmeApplet = new JSApplet.JSME("sketchHost", "100%", "440px", {
+  jsmeApplet = new JSApplet.JSME("sketchHost", "100%", "430px", {
     options: "stereo,autoez,paste,multipart",
   });
   buildBtn.disabled = false;
-  el("canvasStatus").textContent = "editor ready";
+  setStatus("editor ready");
 };
 
-/* ------------------------------------------------------------ path checks */
+/* ------------------------------------------------------------ path check */
 let pathTimer = null;
-function schedulePathCheck() {
-  clearTimeout(pathTimer);
-  pathTimer = setTimeout(checkPath, 250);
+function schedulePathCheck() { clearTimeout(pathTimer); pathTimer = setTimeout(checkPath, 250); }
+
+function chosenFormats() {
+  const out = [];
+  if (el("fmt_cif").checked) out.push("cif");
+  if (el("fmt_sdf").checked) out.push("sdf");
+  if (el("fmt_pdb").checked) out.push("pdb");
+  return out;
 }
 
 async function checkPath() {
-  const body = {
-    directory: el("directory").value,
-    filename: el("filename").value,
-    write_sdf: el("write_sdf").checked,
-  };
+  const formats = chosenFormats();
   const preview = el("pathPreview");
+  if (!formats.length) {
+    preview.innerHTML = '<span class="err">pick at least one output format</span>';
+    return null;
+  }
   try {
     const res = await fetch("/api/check-path", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        directory: el("directory").value,
+        filename: el("filename").value,
+        formats: formats,
+      }),
     });
     const info = await res.json();
-    const bits = [];
-    bits.push(`will write ${info.pdb}`);
-    if (el("write_sdf").checked) bits.push(`         ${info.sdf}`);
-    if (info.error) bits.push(`<span class="err">${info.error}</span>`);
+    const bits = (info.will_write || []).map((p) => "will write " + p);
+    if (info.error) bits.push('<span class="err">' + info.error + "</span>");
     else if (info.will_create_directory)
-      bits.push(`<span class="warn">directory does not exist and will be created</span>`);
+      bits.push('<span class="warn">directory does not exist and will be created</span>');
     if (info.would_overwrite)
-      bits.push(`<span class="warn">already exists — you will be asked before it is replaced</span>`);
+      bits.push('<span class="warn">exists &mdash; you will be asked before it is replaced</span>');
     preview.innerHTML = bits.join("\n");
     return info;
   } catch (e) {
-    preview.innerHTML = `<span class="err">could not check the path: ${e.message}</span>`;
+    preview.innerHTML = '<span class="err">could not check the path: ' + e.message + "</span>";
     return null;
   }
 }
 
 async function bumpFilename() {
   if (!el("autoname").checked) return;
-  const dir = encodeURIComponent(el("directory").value);
   try {
-    const res = await fetch(`/api/next-name?directory=${dir}&stem=sketch`);
-    const data = await res.json();
+    const url = "/api/next-name?directory=" +
+      encodeURIComponent(el("directory").value) + "&stem=sketch";
+    const data = await (await fetch(url)).json();
     if (data.filename) el("filename").value = data.filename;
   } catch (e) { /* leave the field alone */ }
   checkPath();
 }
 
-/* ---------------------------------------------------------------- settings */
+/* ------------------------------------------------------------- settings */
 function collectSettings() {
   const solvent = el("solvent").value;
   return {
     directory: el("directory").value,
     filename: el("filename").value,
-    write_sdf: el("write_sdf").checked,
+    formats: chosenFormats(),
     resname: el("resname").value.trim() || null,
     backend: el("backend").value,
     solvent: solvent === "none" ? "" : solvent,
     auto_solvent: solvent !== "none",
     max_steps: Number(el("max_steps").value) || 500,
+    trace: el("trace").checked,
+    trajectory: el("trajectory").checked,
     protonation: el("protonation").value,
     ph: Number(el("ph").value),
     n_confs: Number(el("n_confs").value) || 1,
@@ -411,49 +497,50 @@ function collectSettings() {
     largest_fragment: el("largest_fragment").checked,
     allow_charge_mismatch: el("allow_charge_mismatch").checked,
     allow_proton_transfer: el("allow_proton_transfer").checked,
+    params: el("params").checked,
+    params_code: el("params_code").value.trim() || null,
+    allow_code_conflict: el("allow_code_conflict").checked,
     threads: Number(el("threads").value) || 1,
   };
 }
 
-/* ------------------------------------------------------------------ build */
-async function build(overwrite = false) {
+/* ---------------------------------------------------------------- build */
+async function build(overwrite) {
   const molblock = await readMolblock();
   if (!molblock || !molblock.trim()) {
-    el("canvasStatus").textContent = "draw something first";
+    setStatus("draw something first");
     logLine("nothing on the canvas.", "warn");
     return;
   }
+  if (!chosenFormats().length) { setStatus("pick an output format"); return; }
 
   buildBtn.disabled = true;
-  el("canvasStatus").textContent = "building…";
-
+  setStatus("building...");
   try {
     const res = await fetch("/api/build", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ molblock, settings: collectSettings(), overwrite }),
+      body: JSON.stringify({
+        molblock: molblock, settings: collectSettings(), overwrite: !!overwrite,
+      }),
     });
-
     if (res.status === 409) {
       const data = await res.json();
-      buildBtn.disabled = false;
-      el("canvasStatus").textContent = "";
+      buildBtn.disabled = false; setStatus("");
       askOverwrite(data.target);
       return;
     }
     const data = await res.json();
     if (!res.ok) {
-      logLine(data.error || `server returned ${res.status}`, "error");
-      buildBtn.disabled = false;
-      el("canvasStatus").textContent = "";
+      logLine(data.error || ("server returned " + res.status), "error");
+      buildBtn.disabled = false; setStatus("");
       return;
     }
-    logRule(`build #${data.job_id}`);
+    logRule("build #" + data.job_id);
     pollJob(data.job_id);
   } catch (e) {
     logLine("could not reach the server: " + e.message, "error");
-    buildBtn.disabled = false;
-    el("canvasStatus").textContent = "";
+    buildBtn.disabled = false; setStatus("");
   }
 }
 
@@ -462,35 +549,108 @@ function pollJob(jobId) {
   clearInterval(polling);
   polling = setInterval(async () => {
     let job;
-    try {
-      job = await (await fetch(`/api/job/${jobId}`)).json();
-    } catch (e) { return; }
-
+    try { job = await (await fetch("/api/job/" + jobId)).json(); } catch (e) { return; }
     while (shown < job.log.length) {
       const entry = job.log[shown++];
       logLine(entry.text, entry.level);
     }
     if (job.state === "done" || job.state === "error") {
-      clearInterval(polling);
-      polling = null;
+      clearInterval(polling); polling = null;
       buildBtn.disabled = false;
       if (job.state === "done") {
         const n = job.result ? job.result.outputs.length : 0;
-        el("canvasStatus").textContent = `done — ${n} file(s) written`;
+        const secs = job.result && job.result.seconds != null
+          ? " in " + job.result.seconds + "s" : "";
+        setStatus("done - " + n + " file(s)" + secs);
+        drawPlot(job.result && job.result.trace);
         bumpFilename();
       } else {
-        el("canvasStatus").textContent = "failed — see the run log";
+        setStatus("failed - see the run log");
       }
     }
-  }, 400);
+  }, 350);
 }
 
-/* -------------------------------------------------------- overwrite prompt */
+/* ----------------------------------------------------------- the graph */
+function drawPlot(trace) {
+  const card = el("plotCard");
+  const svg = el("plot");
+  if (!trace || !trace.length) { card.style.display = "none"; return; }
+
+  // One series per stage. A strain energy and a total electronic energy share no
+  // scale, so each curve is plotted as the change from its own first step —
+  // otherwise one method's absolute value flattens the other into a line.
+  const stages = Array.from(new Set(trace.map((s) => s.stage))).sort((a, b) => a - b);
+  const series = stages.map((stage) => {
+    const steps = trace.filter((s) => s.stage === stage);
+    const first = steps[0].energy;
+    return {
+      backend: steps[0].backend,
+      unit: steps[0].energy_unit,
+      points: steps.map((s, i) => ({ x: i, y: s.energy - first })),
+      net: steps[steps.length - 1].energy - first,
+      count: steps.length,
+    };
+  });
+
+  const W = 560, H = 190, PAD_L = 54, PAD_R = 10, PAD_T = 12, PAD_B = 26;
+  const maxX = Math.max(1, ...series.map((s) => s.points.length - 1));
+  const allY = series.reduce((acc, s) => acc.concat(s.points.map((p) => p.y)), []);
+  const minY = Math.min(0, ...allY), maxY = Math.max(0, ...allY);
+  const spanY = (maxY - minY) || 1;
+  const sx = (x) => PAD_L + (x / maxX) * (W - PAD_L - PAD_R);
+  const sy = (y) => H - PAD_B - ((y - minY) / spanY) * (H - PAD_T - PAD_B);
+
+  const parts = [];
+  for (let i = 0; i <= 4; i++) {
+    const y = minY + (spanY * i) / 4;
+    const py = sy(y).toFixed(1);
+    parts.push('<line class="grid" x1="' + PAD_L + '" y1="' + py +
+               '" x2="' + (W - PAD_R) + '" y2="' + py + '"/>');
+    parts.push('<text x="' + (PAD_L - 6) + '" y="' + (sy(y) + 3).toFixed(1) +
+               '" text-anchor="end">' + fmtShort(y) + "</text>");
+  }
+  parts.push('<line class="axis" x1="' + PAD_L + '" y1="' + (H - PAD_B) +
+             '" x2="' + (W - PAD_R) + '" y2="' + (H - PAD_B) + '"/>');
+  parts.push('<text x="' + PAD_L + '" y="' + (H - 8) + '">step 0</text>');
+  parts.push('<text x="' + (W - PAD_R) + '" y="' + (H - 8) +
+             '" text-anchor="end">step ' + maxX + "</text>");
+
+  series.forEach((s, i) => {
+    const color = "var(" + STAGE_COLORS[i % STAGE_COLORS.length] + ")";
+    const d = s.points.map((p, k) =>
+      (k ? "L" : "M") + sx(p.x).toFixed(1) + "," + sy(p.y).toFixed(1)).join(" ");
+    parts.push('<path d="' + d + '" fill="none" stroke="' + color +
+               '" stroke-width="1.8" stroke-linejoin="round"/>');
+  });
+
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  svg.innerHTML = parts.join("");
+
+  el("plotLegend").innerHTML = series.map((s, i) => {
+    const color = "var(" + STAGE_COLORS[i % STAGE_COLORS.length] + ")";
+    return '<span><i class="swatch" style="background:' + color + '"></i>' +
+      s.backend + " &middot; " + s.count + " steps &middot; net " +
+      s.net.toFixed(4) + " " + s.unit + "</span>";
+  }).join("");
+  el("plotHint").textContent =
+    "Each curve is the change from that method's own first step, because a strain " +
+    "energy and a total electronic energy are not on the same scale.";
+  card.style.display = "block";
+}
+
+function fmtShort(v) {
+  const a = Math.abs(v);
+  if (a === 0) return "0";
+  if (a >= 1000) return v.toExponential(1);
+  if (a >= 1) return v.toFixed(1);
+  return v.toFixed(3);
+}
+
+/* ------------------------------------------------------ overwrite prompt */
 function askOverwrite(target) {
-  const dialog = el("confirmDialog");
-  el("confirmList").innerHTML = target.existing
-    .map((p) => `<li>${p}</li>`).join("");
-  dialog.showModal();
+  el("confirmList").innerHTML = target.existing.map((p) => "<li>" + p + "</li>").join("");
+  el("confirmDialog").showModal();
 }
 el("confirmYes").addEventListener("click", () => {
   el("confirmDialog").close();
@@ -499,83 +659,95 @@ el("confirmYes").addEventListener("click", () => {
 });
 el("confirmNo").addEventListener("click", () => {
   el("confirmDialog").close();
-  logLine("cancelled; change the filename and try again", "muted");
+  logLine("cancelled; change the name and try again", "muted");
 });
 
-/* ------------------------------------------------------------------- setup */
-function describeBackend(id) {
-  const b = backends.find((x) => x.id === id.split(",").pop().trim());
-  if (!b) return "";
-  const bits = [b.description];
-  bits.push(b.takes_charge ? "consumes total charge" : "no charge channel");
-  if (b.supports_solvation) bits.push("implicit solvent available");
-  if (!b.ready) bits.push("UNAVAILABLE: " + b.reason);
-  return bits.join(" · ");
+/* ----------------------------------------------------------------- setup */
+function describeBackend(spec) {
+  const last = spec.split(",").pop().trim();
+  const found = backends.filter((x) => x.id === last)[0];
+  if (!found) return "";
+  const bits = [found.description];
+  bits.push(found.takes_charge ? "consumes total charge" : "no charge channel");
+  if (found.supports_solvation) bits.push("implicit solvent available");
+  if (!found.ready) bits.push("UNAVAILABLE: " + found.reason);
+  return bits.join(" - ");
 }
 
 function populateBackends(cfg) {
   backends = cfg.backends;
   const select = el("backend");
-  const ready = backends.filter((b) => b.ready);
-  const chains = [
-    { value: "mmff94", label: "mmff94 — classical, milliseconds" },
-    { value: "uff", label: "uff — classical, broad elements" },
+  const options = [
+    '<option value="mmff94">mmff94 - classical, milliseconds</option>',
+    '<option value="uff">uff - classical, broad elements</option>',
   ];
-  for (const b of ready) {
-    if (b.id === "mmff94" || b.id === "uff") continue;
-    chains.push({ value: `mmff94,${b.id}`, label: `mmff94 → ${b.id} — ${b.kind}` });
-  }
-  const unavailable = backends.filter((b) => !b.ready);
-  select.innerHTML =
-    chains.map((c) => `<option value="${c.value}">${c.label}</option>`).join("") +
-    (unavailable.length
-      ? `<optgroup label="not available here">` +
-        unavailable.map((b) => `<option value="mmff94,${b.id}" disabled>${b.id} — ${b.reason}</option>`).join("") +
-        `</optgroup>`
-      : "");
+  const groups = { semiempirical: [], mlff: [], ff: [] };
+  backends.filter((b) => b.ready).forEach((b) => {
+    if (b.id === "mmff94" || b.id === "uff") return;
+    (groups[b.kind] || groups.ff).push(
+      '<option value="mmff94,' + b.id + '">mmff94 -&gt; ' + b.id + "</option>");
+  });
+  if (groups.semiempirical.length)
+    options.push('<optgroup label="semi-empirical">' + groups.semiempirical.join("") + "</optgroup>");
+  if (groups.mlff.length)
+    options.push('<optgroup label="machine-learned">' + groups.mlff.join("") + "</optgroup>");
+  if (groups.ff.length)
+    options.push('<optgroup label="other force fields">' + groups.ff.join("") + "</optgroup>");
+  const missing = backends.filter((b) => !b.ready);
+  if (missing.length)
+    options.push('<optgroup label="not available here">' + missing.map((b) =>
+      '<option value="mmff94,' + b.id + '" disabled>' + b.id + " - " + b.reason +
+      "</option>").join("") + "</optgroup>");
+  select.innerHTML = options.join("");
   select.value = cfg.defaults.backend || "mmff94";
+  if (!select.value) select.value = "mmff94";
   el("backendHint").textContent = describeBackend(select.value);
 }
 
 function mountEngine(cfg) {
   engineName = cfg.engine;
-  el("engineTag").textContent = cfg.engine ? `editor: ${cfg.engine}` : "no editor";
+  el("engineTag").textContent = cfg.engine ? "editor: " + cfg.engine : "no editor";
   if (cfg.engine === "jsme") {
     const script = document.createElement("script");
     script.src = "/sketcher/jsme/jsme.nocache.js";
     document.head.appendChild(script);
-  } else {
-    el("sketchHost").innerHTML =
-      '<p class="sub">The JSME editor could not be fetched, so this is the text ' +
-      'fallback — paste a molblock (or a SMILES string) below. Everything else on ' +
-      'this page works normally.</p>' +
-      '<textarea id="pasteBox" spellcheck="false" placeholder="paste MOL / SDF text, or a SMILES string" ' +
-      'style="width:100%;height:14rem;font-family:ui-monospace,monospace;font-size:.78rem;' +
-      'padding:.5rem;border:1px solid var(--border);border-radius:6px;' +
-      'background:var(--field);color:var(--fg)"></textarea>';
-    el("stereoTip").innerHTML =
-      "<b>Stereocenters:</b> in a pasted SMILES use <code>@</code> / <code>@@</code> " +
-      "for centers and <code>/</code> <code>\\</code> for double-bond geometry.";
-    engineName = "paste";
-    buildBtn.disabled = false;
+    return;
   }
+  engineName = "paste";
+  el("sketchHost").innerHTML =
+    '<div style="padding:.85rem"><p style="color:var(--muted);font-size:.82rem;margin:0 0 .5rem">' +
+    "The JSME editor could not be fetched, so this is the text fallback. Paste a molblock " +
+    "or type a SMILES string; everything else on this page works normally.</p>" +
+    '<textarea id="pasteBox" spellcheck="false" placeholder="paste MOL / SDF text, or a SMILES string" ' +
+    'style="width:100%;height:12rem;font-family:ui-monospace,monospace;font-size:.78rem;' +
+    'padding:.5rem;border:1px solid var(--border);border-radius:5px;background:var(--field);' +
+    'color:var(--fg)"></textarea></div>';
+  el("stereoTip").innerHTML =
+    "<b>Stereochemistry in SMILES:</b> <code>@</code> / <code>@@</code> for centers, " +
+    "<code>/</code> and <code>\\</code> for double-bond geometry.";
+  buildBtn.disabled = false;
 }
 
 async function init() {
   let cfg;
-  try {
-    cfg = await (await fetch("/api/config")).json();
-  } catch (e) {
-    el("engineTag").textContent = "server unreachable";
-    return;
-  }
+  try { cfg = await (await fetch("/api/config")).json(); }
+  catch (e) { el("engineTag").textContent = "server unreachable"; return; }
   el("directory").value = cfg.defaults.directory || ".";
-  el("filename").value = cfg.defaults.filename || "sketch0.pdb";
+  el("filename").value = cfg.defaults.filename || "sketch0";
   if (cfg.defaults.threads) el("threads").value = cfg.defaults.threads;
   populateBackends(cfg);
   mountEngine(cfg);
   checkPath();
 }
+
+Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), (tab) => {
+  tab.addEventListener("click", () => {
+    Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), (t) =>
+      t.setAttribute("aria-selected", String(t === tab)));
+    Array.prototype.forEach.call(document.querySelectorAll(".pane"), (p) =>
+      p.setAttribute("data-active", String(p.dataset.pane === tab.dataset.tab)));
+  });
+});
 
 el("backend").addEventListener("change", () => {
   el("backendHint").textContent = describeBackend(el("backend").value);
@@ -585,7 +757,8 @@ el("protonation").addEventListener("change", (e) => {
 });
 el("directory").addEventListener("input", schedulePathCheck);
 el("filename").addEventListener("input", schedulePathCheck);
-el("write_sdf").addEventListener("change", checkPath);
+["fmt_cif", "fmt_sdf", "fmt_pdb"].forEach((id) =>
+  el(id).addEventListener("change", checkPath));
 buildBtn.addEventListener("click", () => build(false));
 el("clearBtn").addEventListener("click", clearCanvas);
 

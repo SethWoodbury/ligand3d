@@ -9,13 +9,21 @@ lives here exactly once.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
 from rdkit.Chem import rdchem
 
 from ..errors import BackendUnavailable, MinimizationError
-from .base import Availability, Capabilities, MinimizeJob, MinimizeResult, modules_present
+from .base import (
+    Availability,
+    Capabilities,
+    MinimizeJob,
+    MinimizeResult,
+    TraceStep,
+    modules_present,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from ase import Atoms
@@ -103,8 +111,18 @@ class ASEBackend:
         self.prepare_atoms(atoms, job)
         atoms.calc = self.make_calculator(job)
 
+        trace: list[TraceStep] = []
+        frames: list = []
+        started = time.perf_counter()
+
         try:
             opt = LBFGS(atoms, logfile=None)
+            if job.trace or job.trajectory:
+                # ASE calls attached observers once per step, including step 0,
+                # which is what makes the first delta meaningful.
+                opt.attach(
+                    lambda: self._observe(atoms, opt, job, trace, frames), interval=1
+                )
             converged = bool(opt.run(fmax=job.fmax, steps=job.max_steps))
             energy_ev = float(atoms.get_potential_energy())
             n_steps = int(opt.get_number_of_steps())
@@ -123,4 +141,27 @@ class ASEBackend:
             energy_unit="kcal/mol",
             energy_kind=self.caps.energy_kind,
             note="" if converged else f"did not converge in {job.max_steps} steps",
+            trace=trace,
+            frames=frames,
+            wall_seconds=time.perf_counter() - started,
+        )
+
+    def _observe(self, atoms, opt, job: MinimizeJob, trace: list, frames: list) -> None:
+        """Record one optimizer step. Attached to the ASE optimizer."""
+        if job.trajectory:
+            frames.append(atoms.get_positions().copy())
+        if not job.trace:
+            return
+        energy = float(atoms.get_potential_energy()) * EV_TO_KCAL
+        previous = trace[-1].energy if trace else None
+        trace.append(
+            TraceStep(
+                stage=job.stage,
+                backend=self.caps.name,
+                step=len(trace),
+                energy=energy,
+                energy_unit="kcal/mol",
+                energy_kind=self.caps.energy_kind,
+                delta=None if previous is None else energy - previous,
+            )
         )

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from rdkit import Chem
@@ -101,6 +102,7 @@ class XTBBinaryBackend:
         return Availability(ok=True)
 
     def minimize(self, job: MinimizeJob) -> MinimizeResult:
+        started = time.perf_counter()
         binary = self._binary()
         if binary is None:
             raise BackendUnavailable(self.available().reason)
@@ -140,6 +142,15 @@ class XTBBinaryBackend:
             energy_h, converged = _parse_xtbopt(optimized, proc.stdout)
             _load_xyz_into_conformer(optimized, job.mol, job.conf_id)
 
+        note = "" if converged else "xtb reported the optimization did not converge"
+        if job.trace or job.trajectory:
+            # xtb's own optimizer runs inside the subprocess; it writes an
+            # xtbopt.log trajectory but no per-step energies we can rely on
+            # across versions, so say so rather than inventing a trace.
+            note = (note + " " if note else "") + (
+                "per-step tracing is not available for gfnff: xtb optimizes "
+                "internally. Use gfn2 for a traced semi-empirical run."
+            )
         return MinimizeResult(
             energy=energy_h * HARTREE_TO_KCAL,
             converged=converged,
@@ -147,7 +158,8 @@ class XTBBinaryBackend:
             backend=self.caps.name,
             energy_unit="kcal/mol",
             energy_kind=self.caps.energy_kind,
-            note="" if converged else "xtb reported the optimization did not converge",
+            note=note.strip(),
+            wall_seconds=time.perf_counter() - started,
         )
 
 

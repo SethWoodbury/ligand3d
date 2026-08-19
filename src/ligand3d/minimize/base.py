@@ -13,7 +13,7 @@ answer. Adding a new potential means adding one file and one registration.
 from __future__ import annotations
 
 import importlib.util
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol, runtime_checkable
 
 from rdkit import Chem
@@ -82,6 +82,37 @@ class Availability:
 
 
 @dataclass
+class TraceStep:
+    """One optimizer step, for the energy trace."""
+
+    stage: int
+    """Position in a chained backend spec, so `mmff94,gfn2` stays separable."""
+    backend: str
+    step: int
+    energy: float
+    energy_unit: str = "kcal/mol"
+    energy_kind: str = "strain"
+    delta: float | None = None
+    """Change from the previous step of the same stage.
+
+    Deliberately not carried across a stage boundary: energies from two
+    different methods are not comparable, so a delta spanning them would be
+    a meaningless number that looks meaningful.
+    """
+
+    def to_json(self) -> dict:
+        return {
+            "stage": self.stage,
+            "backend": self.backend,
+            "step": self.step,
+            "energy": self.energy,
+            "energy_unit": self.energy_unit,
+            "energy_kind": self.energy_kind,
+            "delta": self.delta,
+        }
+
+
+@dataclass
 class MinimizeJob:
     """Everything a backend needs to minimize one conformer."""
 
@@ -95,6 +126,18 @@ class MinimizeJob:
     solvent: str | None = None
     n_threads: int = 1
 
+    trace: bool = False
+    """Record the energy at every optimizer step.
+
+    Off by default because it forces the RDKit force fields to be driven one
+    step at a time, which is slower than letting them run to convergence
+    internally.
+    """
+    trajectory: bool = False
+    """Keep the coordinates at every step so the path can be written out."""
+    stage: int = 0
+    """Which link of a backend chain this job is; recorded on each trace step."""
+
 
 @dataclass
 class MinimizeResult:
@@ -107,6 +150,10 @@ class MinimizeResult:
     energy_unit: str = "kcal/mol"
     energy_kind: str = "strain"
     note: str = ""
+    trace: list[TraceStep] = field(default_factory=list)
+    frames: list = field(default_factory=list)
+    """Coordinates per step, as (n_atoms, 3) arrays, when trajectory is on."""
+    wall_seconds: float = 0.0
 
 
 @runtime_checkable

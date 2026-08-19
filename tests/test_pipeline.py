@@ -41,13 +41,15 @@ class TestTargetMolecules:
         molecule = from_smiles(smiles)
         assert molecule.formula == formula
 
-        outcomes = run(molecule, Settings(), output=tmp_path / "out.pdb")
+        outcomes = run(molecule, Settings(), output=tmp_path / "out.cif")
         assert len(outcomes) == 1
 
         outcome = outcomes[0]
         assert outcome.mol_3d.GetNumAtoms() == n_atoms
-        assert outcome.pdb_path.exists()
+        # mmCIF is the default primary output.
+        assert outcome.cif_path is not None and outcome.cif_path.exists()
         assert outcome.sdf_path.exists()
+        assert outcome.pdb_path is None
         assert outcome.best_energy is not None
 
     def test_quinuclidinone_is_not_rejected_for_phantom_stereocenters(self):
@@ -55,12 +57,26 @@ class TestTargetMolecules:
         build(from_smiles(QUINUCLIDINONE), Settings())
 
     def test_output_is_reloadable(self, tmp_path):
+        """Every format we write must read back as the same molecule."""
+        from ligand3d.molecule import read_3d
+
         outcome = run(
-            from_smiles(QUINUCLIDINONE), Settings(), output=tmp_path / "q.pdb"
+            from_smiles(QUINUCLIDINONE),
+            Settings(formats=("cif", "pdb", "sdf")),
+            output=tmp_path / "q.cif",
         )[0]
-        back = Chem.MolFromPDBFile(str(outcome.pdb_path), removeHs=False, sanitize=False)
-        assert back is not None
-        assert back.GetNumAtoms() == outcome.mol_3d.GetNumAtoms()
+        for path in (outcome.cif_path, outcome.pdb_path, outcome.sdf_path):
+            back = read_3d(path)
+            assert back.GetNumAtoms() == outcome.mol_3d.GetNumAtoms(), path
+
+    def test_mmcif_round_trips_bond_orders(self, tmp_path):
+        """PDB loses bond orders; the mmCIF carries them in _chem_comp_bond."""
+        from ligand3d.molecule import read_3d
+
+        molecule = from_smiles("O=C1CN2CCC1CC2")
+        outcome = run(molecule, Settings(), output=tmp_path / "q.cif")[0]
+        back = read_3d(outcome.cif_path)
+        assert Chem.MolToSmiles(Chem.RemoveHs(back)) == molecule.smiles
 
 
 class TestStereoPolicy:
@@ -76,16 +92,16 @@ class TestStereoPolicy:
         outcomes = run(
             from_smiles("CC(N)C(=O)O"),
             Settings(stereo_mode="enumerate"),
-            output=tmp_path / "ala.pdb",
+            output=tmp_path / "ala.cif",
         )
         assert len(outcomes) == 2
-        paths = {o.pdb_path for o in outcomes}
+        paths = {o.primary_path for o in outcomes}
         assert len(paths) == 2, "each isomer needs its own file"
         assert all(p.exists() for p in paths)
 
     def test_specified_stereo_survives_the_whole_pipeline(self, tmp_path):
         molecule = from_smiles("C[C@@H](O)[C@H](N)C(=O)O")
-        outcome = run(molecule, Settings(), output=tmp_path / "thr.pdb")[0]
+        outcome = run(molecule, Settings(), output=tmp_path / "thr.cif")[0]
 
         from ligand3d.embed import perceive_stereo_3d
 
@@ -96,7 +112,7 @@ class TestStereoPolicy:
 class TestConformers:
     def test_multiple_conformers_are_generated_and_ranked(self, tmp_path):
         outcome = run(
-            from_smiles(GABAPENTIN), Settings(n_confs=10), output=tmp_path / "g.pdb"
+            from_smiles(GABAPENTIN), Settings(n_confs=10), output=tmp_path / "g.cif"
         )[0]
         assert outcome.mol_3d.GetNumConformers() > 1
 
@@ -105,7 +121,7 @@ class TestConformers:
 
     def test_conformers_are_distinct(self, tmp_path):
         outcome = run(
-            from_smiles("CCCCCCCCO"), Settings(n_confs=5), output=tmp_path / "o.pdb"
+            from_smiles("CCCCCCCCO"), Settings(n_confs=5), output=tmp_path / "o.cif"
         )[0]
         positions = [
             np.array(c.GetPositions()) for c in outcome.mol_3d.GetConformers()
@@ -115,12 +131,12 @@ class TestConformers:
 
     def test_energy_window_filters(self, tmp_path):
         wide = run(
-            from_smiles("CCCCCCCCO"), Settings(n_confs=20), output=tmp_path / "w.pdb"
+            from_smiles("CCCCCCCCO"), Settings(n_confs=20), output=tmp_path / "w.cif"
         )[0]
         narrow = run(
             from_smiles("CCCCCCCCO"),
             Settings(n_confs=20, energy_window=1.0),
-            output=tmp_path / "n.pdb",
+            output=tmp_path / "n.cif",
         )[0]
         assert len(narrow.records) <= len(wide.records)
 
@@ -135,7 +151,7 @@ class TestBackendSelection:
         outcome = run(
             from_smiles(QUINUCLIDINONE),
             Settings(backend="mmff94,gfn2"),
-            output=tmp_path / "q.pdb",
+            output=tmp_path / "q.cif",
         )[0]
         assert outcome.records[0].backend == "gfn2"
 
@@ -164,7 +180,7 @@ class TestProtonationInPipeline:
         outcome = run(
             from_smiles(GABAPENTIN),
             Settings(ph=7.4, backend="mmff94,gfn2"),
-            output=tmp_path / "g.pdb",
+            output=tmp_path / "g.cif",
         )[0]
         assert outcome.molecule.is_zwitterion
         assert any("solvation" in note for note in outcome.notes)
@@ -183,19 +199,19 @@ class TestProtonationInPipeline:
         outcomes = run(
             from_smiles(GABAPENTIN),
             Settings(ph=7.4, enumerate_states=True),
-            output=tmp_path / "g.pdb",
+            output=tmp_path / "g.cif",
         )
         assert len(outcomes) > 1
-        assert len({o.pdb_path for o in outcomes}) == len(outcomes)
+        assert len({o.primary_path for o in outcomes}) == len(outcomes)
 
 
 class TestDeterminism:
     def test_same_seed_gives_identical_coordinates(self, tmp_path):
         first = run(
-            from_smiles(GABAPENTIN), Settings(seed=7), output=tmp_path / "a.pdb"
+            from_smiles(GABAPENTIN), Settings(seed=7), output=tmp_path / "a.cif"
         )[0]
         second = run(
-            from_smiles(GABAPENTIN), Settings(seed=7), output=tmp_path / "b.pdb"
+            from_smiles(GABAPENTIN), Settings(seed=7), output=tmp_path / "b.cif"
         )[0]
         assert np.allclose(
             first.mol_3d.GetConformer(0).GetPositions(),

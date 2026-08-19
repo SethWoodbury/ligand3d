@@ -18,6 +18,7 @@ from ligand3d.sketch.session import (
     describe_stereo,
     inspect_target,
     next_filename,
+    normalize_formats,
 )
 
 
@@ -30,69 +31,110 @@ def molblock_for(smiles: str) -> str:
 
 
 class TestTargetInspection:
-    """The page shows where files will land before writing anything."""
+    """The page shows where files will land before writing anything.
 
-    def test_resolves_directory_and_forces_pdb_suffix(self, tmp_path):
-        info = inspect_target(str(tmp_path), "thing.xyz")
-        assert info.filename == "thing.pdb"
-        assert info.pdb == str(tmp_path / "thing.pdb")
-        assert info.sdf == str(tmp_path / "thing.sdf")
-        assert info.directory_exists
-        assert not info.will_create_directory
+    The filename field is a *base* name now, because one build can write an
+    mmCIF, a PDB, an SDF, a trajectory, and a params set.
+    """
+
+    def test_resolves_a_base_name_per_format(self, tmp_path):
+        info = inspect_target(str(tmp_path), "thing", formats=["cif", "pdb", "sdf"])
+        assert info.stem == "thing"
+        assert info.formats == ("cif", "pdb", "sdf")
+        assert info.will_write == [
+            str(tmp_path / "thing.cif"),
+            str(tmp_path / "thing.pdb"),
+            str(tmp_path / "thing.sdf"),
+        ]
+        assert info.primary == str(tmp_path / "thing.cif")
         assert info.error is None
 
+    def test_a_typed_extension_is_not_doubled(self, tmp_path):
+        """Typing "lig.cif" must not produce "lig.cif.cif"."""
+        info = inspect_target(str(tmp_path), "lig.cif", formats=["cif"])
+        assert info.stem == "lig"
+        assert info.will_write == [str(tmp_path / "lig.cif")]
+
+    def test_an_unknown_extension_is_kept_as_part_of_the_name(self, tmp_path):
+        info = inspect_target(str(tmp_path), "my.thing", formats=["cif"])
+        assert info.will_write == [str(tmp_path / "my.thing.cif")]
+
+    def test_defaults_when_no_formats_are_given(self, tmp_path):
+        assert inspect_target(str(tmp_path), "x").formats == ("cif", "sdf")
+
     def test_flags_a_directory_that_would_be_created(self, tmp_path):
-        info = inspect_target(str(tmp_path / "new" / "deeper"), "a.pdb")
+        info = inspect_target(str(tmp_path / "new" / "deeper"), "a")
         assert info.will_create_directory
         assert info.writable
         assert info.error is None
 
     def test_reports_existing_files_as_an_overwrite(self, tmp_path):
-        (tmp_path / "a.pdb").write_text("x")
-        info = inspect_target(str(tmp_path), "a.pdb")
+        (tmp_path / "a.cif").write_text("x")
+        info = inspect_target(str(tmp_path), "a", formats=["cif", "sdf"])
         assert info.would_overwrite
-        assert str(tmp_path / "a.pdb") in info.existing
+        assert str(tmp_path / "a.cif") in info.existing
+        assert str(tmp_path / "a.sdf") not in info.existing
 
-    def test_sdf_is_excluded_when_not_requested(self, tmp_path):
-        (tmp_path / "a.sdf").write_text("x")
-        assert not inspect_target(str(tmp_path), "a.pdb", write_sdf=False).would_overwrite
-        assert inspect_target(str(tmp_path), "a.pdb", write_sdf=True).would_overwrite
+    def test_only_selected_formats_count_as_a_clash(self, tmp_path):
+        (tmp_path / "a.pdb").write_text("x")
+        assert not inspect_target(str(tmp_path), "a", formats=["cif"]).would_overwrite
+        assert inspect_target(str(tmp_path), "a", formats=["pdb"]).would_overwrite
 
     def test_unwritable_location_is_an_error(self):
-        info = inspect_target("/proc/nope/deeper", "a.pdb")
-        assert info.error is not None
+        assert inspect_target("/proc/nope/deeper", "a").error is not None
 
     def test_a_file_where_a_directory_should_be_is_an_error(self, tmp_path):
         blocker = tmp_path / "blocker"
         blocker.write_text("not a directory")
-        assert inspect_target(str(blocker), "a.pdb").error is not None
+        assert inspect_target(str(blocker), "a").error is not None
 
     def test_empty_filename_gets_a_default(self, tmp_path):
-        assert inspect_target(str(tmp_path), "   ").filename == "sketch0.pdb"
+        assert inspect_target(str(tmp_path), "   ").stem == "sketch0"
 
     def test_path_components_in_the_filename_are_stripped(self, tmp_path):
-        info = inspect_target(str(tmp_path), "../../escape.pdb")
-        assert info.filename == "escape.pdb"
-        assert info.pdb == str(tmp_path / "escape.pdb")
+        info = inspect_target(str(tmp_path), "../../escape", formats=["cif"])
+        assert info.stem == "escape"
+        assert info.will_write == [str(tmp_path / "escape.cif")]
+
+
+class TestFormatNormalization:
+    def test_mmcif_is_an_alias_for_cif(self):
+        assert normalize_formats("mmcif") == ("cif",)
+
+    def test_unknown_formats_are_dropped(self):
+        assert normalize_formats(["cif", "xyz", "pdb"]) == ("cif", "pdb")
+
+    def test_order_is_preserved_and_repeats_removed(self):
+        assert normalize_formats(["pdb", "cif", "pdb"]) == ("pdb", "cif")
+
+    def test_empty_falls_back_to_the_default(self):
+        assert normalize_formats([]) == ("cif", "sdf")
+        assert normalize_formats(None) == ("cif", "sdf")
 
 
 class TestFilenameSequence:
     """Successive builds should not need the user to invent names."""
 
     def test_starts_at_zero(self, tmp_path):
-        assert next_filename(str(tmp_path)) == "sketch0.pdb"
+        assert next_filename(str(tmp_path)) == "sketch0"
 
     def test_skips_names_already_taken(self, tmp_path):
         for n in (0, 1, 2, 4):
-            (tmp_path / f"sketch{n}.pdb").write_text("x")
-        assert next_filename(str(tmp_path)) == "sketch3.pdb"
+            (tmp_path / f"sketch{n}.cif").write_text("x")
+        assert next_filename(str(tmp_path)) == "sketch3"
+
+    def test_any_known_extension_counts_as_taken(self, tmp_path):
+        """A name is taken if any format we write already uses it."""
+        (tmp_path / "sketch0.pdb").write_text("x")
+        (tmp_path / "sketch1.sdf").write_text("x")
+        assert next_filename(str(tmp_path)) == "sketch2"
 
     def test_honours_a_custom_stem(self, tmp_path):
-        (tmp_path / "lig0.pdb").write_text("x")
-        assert next_filename(str(tmp_path), stem="lig") == "lig1.pdb"
+        (tmp_path / "lig0.cif").write_text("x")
+        assert next_filename(str(tmp_path), stem="lig") == "lig1"
 
     def test_missing_directory_starts_at_zero(self, tmp_path):
-        assert next_filename(str(tmp_path / "absent")) == "sketch0.pdb"
+        assert next_filename(str(tmp_path / "absent")) == "sketch0"
 
 
 class TestStereoNarration:
@@ -120,11 +162,26 @@ class TestStereoNarration:
         assert "fixed by the ring system" in joined
         assert "left undefined" not in joined
 
-    def test_reports_double_bond_geometry(self):
+    def test_reports_double_bond_geometry_as_e_z_with_cis_trans(self):
         from ligand3d.molecule import from_smiles
 
         joined = " ".join(describe_stereo(from_smiles(r"C/C=C/C(=O)O")))
-        assert "double bond(s) with geometry" in joined
+        assert "double bond(s) with defined geometry" in joined
+        assert "= E (trans)" in joined
+
+        joined = " ".join(describe_stereo(from_smiles(r"OC(=O)/C=C\\C(=O)O")))
+        assert "= Z (cis)" in joined
+
+    def test_refuses_cis_trans_where_it_does_not_apply(self):
+        """Tamoxifen is unambiguously (Z) but tetrasubstituted, so "cis" is
+        meaningless — older literature calls the same geometry "trans"."""
+        from ligand3d.molecule import from_smiles
+
+        joined = " ".join(describe_stereo(from_smiles(
+            r"CC/C(=C(\\c1ccccc1)c1ccc(OCCN(C)C)cc1)c1ccccc1")))
+        assert "= Z" in joined
+        assert "cis/trans does not apply" in joined
+        assert "(cis)" not in joined
 
 
 def test_backend_catalog_reports_capabilities():
@@ -147,7 +204,7 @@ def session(tmp_path, monkeypatch):
         open_browser=False,
         quiet=True,
         block=False,
-        defaults={"directory": str(tmp_path), "filename": "sketch0.pdb",
+        defaults={"directory": str(tmp_path), "filename": "sketch0",
                   "backend": "mmff94", "threads": 2},
     )
     base = f"http://127.0.0.1:{port}"
@@ -203,9 +260,9 @@ def _run(base: str, smiles: str, settings: dict, overwrite: bool = False) -> dic
 def _settings(tmp_path, **overrides) -> dict:
     base = {
         "directory": str(tmp_path),
-        "filename": "sketch0.pdb",
+        "filename": "sketch0",
+        "formats": ["cif", "sdf"],
         "backend": "mmff94",
-        "write_sdf": True,
         "protonation": "as-drawn",
         "n_confs": 1,
         "conf_method": "rdkit",
@@ -251,37 +308,39 @@ class TestSessionAPI:
 
     def test_next_name_endpoint(self, session):
         base, tmp_path = session
-        (tmp_path / "sketch0.pdb").write_text("x")
+        (tmp_path / "sketch0.cif").write_text("x")
         query = urllib.parse.urlencode({"directory": str(tmp_path), "stem": "sketch"})
-        assert _get(base, f"/api/next-name?{query}")["filename"] == "sketch1.pdb"
+        assert _get(base, f"/api/next-name?{query}")["filename"] == "sketch1"
 
     def test_check_path_endpoint(self, session):
         base, tmp_path = session
         _, info = _post(base, "/api/check-path",
-                        {"directory": str(tmp_path / "sub"), "filename": "a.pdb"})
+                        {"directory": str(tmp_path / "sub"), "filename": "a",
+                         "formats": ["cif", "pdb"]})
         assert info["will_create_directory"]
+        assert len(info["will_write"]) == 2
 
     def test_build_writes_the_files_and_logs_stereo(self, session):
         base, tmp_path = session
         job = _run(base, "C[C@@H](O)[C@H](N)C(=O)O", _settings(tmp_path))
 
         assert job["state"] == "done", job
-        assert (tmp_path / "sketch0.pdb").exists()
+        assert (tmp_path / "sketch0.cif").exists()
         assert (tmp_path / "sketch0.sdf").exists()
 
         text = " ".join(entry["text"] for entry in job["log"])
         assert "2 stereocenter(s) defined" in text
-        assert str(tmp_path / "sketch0.pdb") in text
+        assert str(tmp_path / "sketch0.cif") in text
         assert job["result"]["n_conformers"] == 1
         assert len(job["result"]["stereocenters"]) == 2
 
     def test_two_builds_in_one_session(self, session):
         base, tmp_path = session
-        first = _run(base, "CCO", _settings(tmp_path, filename="sketch0.pdb"))
-        second = _run(base, "O=C1CN2CCC1CC2", _settings(tmp_path, filename="sketch1.pdb"))
+        first = _run(base, "CCO", _settings(tmp_path, filename="sketch0"))
+        second = _run(base, "O=C1CN2CCC1CC2", _settings(tmp_path, filename="sketch1"))
         assert first["state"] == "done" and second["state"] == "done"
-        assert (tmp_path / "sketch0.pdb").exists()
-        assert (tmp_path / "sketch1.pdb").exists()
+        assert (tmp_path / "sketch0.cif").exists()
+        assert (tmp_path / "sketch1.cif").exists()
 
     def test_overwrite_needs_confirmation_then_proceeds(self, session):
         base, tmp_path = session
@@ -344,7 +403,7 @@ class TestSessionAPI:
         target = tmp_path / "made" / "here"
         job = _run(base, "CCO", _settings(tmp_path, directory=str(target)))
         assert job["state"] == "done"
-        assert (target / "sketch0.pdb").exists()
+        assert (target / "sketch0.cif").exists()
 
     @pytest.mark.parametrize(
         "path",

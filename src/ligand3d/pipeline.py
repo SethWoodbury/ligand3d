@@ -8,6 +8,7 @@ one place.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,7 +27,15 @@ from .molecule import (
     require_defined_stereo,
     require_single_fragment,
 )
-from .write import ConformerRecord, verify_pdb_roundtrip, write_pdb, write_sdf
+from .write import (
+    ConformerRecord,
+    verify_cif_roundtrip,
+    verify_pdb_roundtrip,
+    write_cif,
+    write_pdb,
+    write_sdf,
+    write_trajectory,
+)
 
 
 @dataclass
@@ -57,7 +66,25 @@ class Settings:
     seed: int = 0xF00D
     n_threads: int = 1
     resname: str | None = None
-    write_sdf: bool = True
+
+    formats: tuple[str, ...] = ("cif", "sdf")
+    """Which representations to write.
+
+    mmCIF is the default because it carries everything PDB does plus the bond
+    orders PDB cannot, and it is what current structural tools prefer. The SDF
+    rides along because it is the format RDKit itself round-trips perfectly.
+    PDB is written on request; nothing in the params path needs it, since
+    molfile_to_params reads the SDF directly.
+    """
+    trace: bool = False
+    """Record energy at every optimizer step. Costs time; off by default."""
+    trajectory: bool = False
+    """Keep every step's coordinates and write them as a multi-model PDB."""
+
+    params: bool = False
+    """Also generate a Rosetta params file."""
+    params_code: str | None = None
+    allow_code_conflict: bool = False
 
 
 @dataclass
@@ -67,14 +94,34 @@ class Outcome:
     molecule: Molecule
     mol_3d: Chem.Mol
     records: list[ConformerRecord]
+    cif_path: Path | None = None
     pdb_path: Path | None = None
     sdf_path: Path | None = None
+    trajectory_path: Path | None = None
+    params_result: object | None = None
     notes: list[str] = field(default_factory=list)
+    trace: list = field(default_factory=list)
+    frames: list = field(default_factory=list)
+    wall_seconds: float = 0.0
 
     @property
     def best_energy(self) -> float | None:
         energies = [r.energy for r in self.records if r.energy is not None]
         return min(energies) if energies else None
+
+    @property
+    def primary_path(self) -> Path | None:
+        """The file a user most likely means when they say "the output"."""
+        return self.cif_path or self.pdb_path or self.sdf_path
+
+    def written(self) -> list[Path]:
+        paths = [
+            p for p in (self.cif_path, self.pdb_path, self.sdf_path, self.trajectory_path)
+            if p is not None
+        ]
+        if self.params_result is not None:
+            paths.extend(self.params_result.paths())
+        return paths
 
 
 def expand_inputs(molecule: Molecule, settings: Settings) -> list[Molecule]:
@@ -127,6 +174,7 @@ def resolve_solvent(molecule: Molecule, settings: Settings, supports_solvation: 
 
 def build(molecule: Molecule, settings: Settings) -> Outcome:
     """Build and minimize one molecule. The core of the tool."""
+    started = time.perf_counter()
     # `run` already screens inputs, but `build` is public and callers reach for
     # it directly. Re-checking here means the guarantee holds for the Python API
     # too, and it is idempotent for anything that came through `expand_inputs`.
@@ -180,11 +228,19 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
     results: dict[int, MinimizeResult] = {}
     failures: list[str] = []
 
+    # Tracing every conformer would produce an unreadable pile of curves, so
+    # only the first is traced; it is the one the graph shows.
+    trace_conformer = mol_3d.GetConformers()[0].GetId() if mol_3d.GetNumConformers() else -1
+    traces: dict[int, list] = {}
+    frames: dict[int, list] = {}
+    timings: list[tuple[str, float]] = []
+
     for conformer in list(mol_3d.GetConformers()):
         cid = conformer.GetId()
         last: MinimizeResult | None = None
+        observe = cid == trace_conformer
         try:
-            for backend in backends:
+            for stage, backend in enumerate(backends):
                 job = MinimizeJob(
                     mol=mol_3d,
                     conf_id=cid,
@@ -193,8 +249,15 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
                     fmax=settings.fmax,
                     solvent=solvent if backend.caps.supports_solvation else None,
                     n_threads=settings.n_threads,
+                    trace=settings.trace and observe,
+                    trajectory=settings.trajectory and observe,
+                    stage=stage,
                 )
                 last = backend.minimize(job)
+                timings.append((backend.caps.name, last.wall_seconds))
+                if observe:
+                    traces.setdefault(cid, []).extend(last.trace)
+                    frames.setdefault(cid, []).extend(last.frames)
         except Ligand3DError as exc:
             failures.append(f"conformer {cid}: {exc}")
             continue
@@ -244,7 +307,25 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
         for new_conf, old_cid in zip(final.GetConformers(), keep)
     ]
 
-    return Outcome(molecule=molecule, mol_3d=final, records=records, notes=notes)
+    per_backend: dict[str, float] = {}
+    for name, seconds in timings:
+        per_backend[name] = per_backend.get(name, 0.0) + seconds
+    if per_backend:
+        breakdown = ", ".join(f"{name} {sec:.2f}s" for name, sec in per_backend.items())
+        notes.append(f"minimization time: {breakdown}")
+
+    elapsed = time.perf_counter() - started
+    notes.append(f"total time {elapsed:.2f}s")
+
+    return Outcome(
+        molecule=molecule,
+        mol_3d=final,
+        records=records,
+        notes=notes,
+        trace=traces.get(trace_conformer, []),
+        frames=frames.get(trace_conformer, []),
+        wall_seconds=elapsed,
+    )
 
 
 def run(
@@ -260,28 +341,79 @@ def run(
     for n, variant in enumerate(variants, start=1):
         outcome = build(variant, settings)
         if output is not None:
-            path = _numbered(output, n) if multiple else output
-            resname = settings.resname or variant.name
-            outcome.pdb_path = write_pdb(
-                path,
-                outcome.mol_3d,
-                records=outcome.records,
-                resname=resname,
-                smiles=variant.smiles,
-                extra_remarks=[f"SOURCE {variant.source}"[:68]],
-            )
-            # Confirm what we just wrote is readable and its atom names are
-            # unique, rather than trusting the writer.
-            verify_pdb_roundtrip(outcome.pdb_path, outcome.mol_3d)
-            if settings.write_sdf:
-                outcome.sdf_path = write_sdf(
-                    path.with_suffix(".sdf"),
-                    outcome.mol_3d,
-                    records=outcome.records,
-                    name=resname,
-                )
+            base = _numbered(output, n) if multiple else output
+            _write_outputs(outcome, variant, settings, base)
         outcomes.append(outcome)
     return outcomes
+
+
+def _write_outputs(
+    outcome: Outcome, variant: Molecule, settings: Settings, base: Path
+) -> None:
+    """Write every requested representation of one built molecule."""
+    resname = settings.resname or variant.name
+    remarks = [f"SOURCE {variant.source}"[:68]]
+    formats = settings.formats
+
+    if "cif" in formats:
+        outcome.cif_path = write_cif(
+            base.with_suffix(".cif"),
+            outcome.mol_3d,
+            records=outcome.records,
+            resname=resname,
+            smiles=variant.smiles,
+            extra_remarks=remarks,
+        )
+        verify_cif_roundtrip(outcome.cif_path, outcome.mol_3d)
+
+    if "pdb" in formats:
+        outcome.pdb_path = write_pdb(
+            base.with_suffix(".pdb"),
+            outcome.mol_3d,
+            records=outcome.records,
+            resname=resname,
+            smiles=variant.smiles,
+            extra_remarks=remarks,
+        )
+        # Confirm what we just wrote is readable and its atom names are unique,
+        # rather than trusting the writer.
+        verify_pdb_roundtrip(outcome.pdb_path, outcome.mol_3d)
+
+    if "sdf" in formats:
+        outcome.sdf_path = write_sdf(
+            base.with_suffix(".sdf"),
+            outcome.mol_3d,
+            records=outcome.records,
+            name=resname,
+        )
+
+    if settings.trajectory and outcome.frames:
+        outcome.trajectory_path = write_trajectory(
+            base.with_name(f"{base.stem}_traj.pdb"),
+            outcome.mol_3d,
+            outcome.frames,
+            resname=resname,
+            energies=[step.energy for step in outcome.trace] or None,
+            stage_labels=[f"stage {s.stage}: {s.backend}" for s in outcome.trace] or None,
+        )
+        outcome.notes.append(
+            f"trajectory: {len(outcome.frames)} frames over "
+            f"{len({step.stage for step in outcome.trace}) or 1} stage(s)"
+        )
+
+    if settings.params:
+        from . import params as params_mod
+
+        code = params_mod.normalize_code(settings.params_code or resname)
+        outcome.params_result = params_mod.generate(
+            outcome.mol_3d,
+            code=code,
+            out_dir=base.parent,
+            conformers=outcome.mol_3d.GetNumConformers() > 1,
+            allow_code_conflict=settings.allow_code_conflict,
+        )
+        # Only the commentary; the paths come from written().
+        outcome.notes.extend(outcome.params_result.notes)
 
 
 def _numbered(path: Path, n: int) -> Path:

@@ -339,6 +339,87 @@ def _finish(mol: Chem.Mol, source: str, name: str) -> Molecule:
                     stereo=audit_stereo(mol))
 
 
+@dataclass(frozen=True)
+class DoubleBondReport:
+    """A stereogenic double bond, described for a human."""
+
+    begin: int
+    end: int
+    cip: str
+    """E or Z, from CIP priorities. Always well defined."""
+    cis_trans: str | None
+    """"cis" or "trans", or None when the term does not apply.
+
+    See `describe_double_bonds` for why this is often None.
+    """
+    n_hydrogens: tuple[int, int] = (0, 0)
+
+    def describe(self) -> str:
+        core = f"bond {self.begin}-{self.end} = {self.cip}"
+        if self.cis_trans:
+            return f"{core} ({self.cis_trans})"
+        return f"{core} (cis/trans not applicable: {self._why}) "
+
+    @property
+    def _why(self) -> str:
+        left, right = self.n_hydrogens
+        if left == 0 and right == 0:
+            return "tetrasubstituted"
+        return "trisubstituted"
+
+
+def describe_double_bonds(molecule: "Molecule") -> list[DoubleBondReport]:
+    """Report each stereogenic double bond as CIP E/Z, plus cis/trans if valid.
+
+    E/Z and cis/trans are not synonyms. E/Z is defined by CIP priority of the
+    substituents on each alkene carbon and is always unambiguous. cis/trans
+    describes two *reference* substituents being on the same or opposite side,
+    which is only meaningful when it is obvious which two atoms are meant.
+
+    When each alkene carbon carries exactly one hydrogen — the common
+    1,2-disubstituted case — there is exactly one substituent per carbon to
+    compare, that comparison is what CIP ranks, and the two systems coincide:
+    Z is cis and E is trans.
+
+    For a tri- or tetrasubstituted alkene they do not coincide, because "cis to
+    what?" has no single answer. Tamoxifen is the standard example: it is
+    unambiguously (Z) by CIP, both alkene carbons are fully substituted, and
+    older literature describes the same geometry as "trans" with respect to the
+    two phenyl rings. So cis/trans is reported only where it is defensible, and
+    E/Z is always reported.
+    """
+    audit = molecule.stereo
+    if not audit.assigned_bonds:
+        return []
+
+    work = Chem.Mol(molecule.mol)
+    with rdkit_quiet():
+        Chem.AssignStereochemistry(work, cleanIt=True, force=True)
+
+    counts: dict[tuple[int, int], tuple[int, int]] = {}
+    for bond in work.GetBonds():
+        key = tuple(sorted((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())))
+        counts[key] = (
+            bond.GetBeginAtom().GetTotalNumHs(),
+            bond.GetEndAtom().GetTotalNumHs(),
+        )
+
+    reports = []
+    for begin, end, cip in audit.assigned_bonds:
+        hydrogens = counts.get((begin, end), (0, 0))
+        unambiguous = hydrogens[0] == 1 and hydrogens[1] == 1
+        cis_trans = None
+        if unambiguous and cip in ("E", "Z"):
+            cis_trans = "cis" if cip == "Z" else "trans"
+        reports.append(
+            DoubleBondReport(
+                begin=begin, end=end, cip=cip,
+                cis_trans=cis_trans, n_hydrogens=hydrogens,
+            )
+        )
+    return reports
+
+
 def count_embeddable_isomers(mol: Chem.Mol, limit: int = 2) -> int:
     """Count distinct, geometrically realizable isomers of the undefined centers.
 
@@ -433,3 +514,164 @@ def enumerate_stereoisomers(molecule: Molecule, max_isomers: int = 32) -> list[M
             )
         )
     return out
+
+
+def read_3d(path: str | os.PathLike[str]) -> Chem.Mol:
+    """Load a molecule that already has 3D coordinates, keeping them and its Hs.
+
+    Distinct from `from_file`, which normalizes hydrogens away because it is
+    preparing an input for embedding. Here the coordinates *are* the payload —
+    this is what the per-step commands (`minimize`, `conformers`, `params`)
+    operate on — so nothing is stripped, and every conformer in the file is
+    kept.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise InputError(f"no such file: {p}")
+
+    suffix = p.suffix.lower()
+    mol: Chem.Mol | None = None
+
+    with rdkit_quiet():
+        if suffix in (".sdf", ".mol", ".mdl"):
+            supplier = Chem.SDMolSupplier(str(p), sanitize=True, removeHs=False)
+            mols = [m for m in supplier if m is not None]
+            if mols:
+                mol = mols[0]
+                # Extra records are treated as further conformers of the first,
+                # which is how a conformer ensemble is normally stored.
+                for extra in mols[1:]:
+                    if extra.GetNumAtoms() == mol.GetNumAtoms() and extra.GetNumConformers():
+                        mol.AddConformer(
+                            Chem.Conformer(extra.GetConformer()), assignId=True
+                        )
+        elif suffix == ".pdb":
+            mol = Chem.MolFromPDBFile(str(p), sanitize=True, removeHs=False)
+        elif suffix in (".cif", ".mmcif"):
+            mol = _mol_from_cif(p)
+        else:
+            raise InputError(
+                f"cannot read 3D coordinates from {suffix!r}. "
+                "Supported: .sdf .mol .pdb .cif"
+            )
+
+    if mol is None:
+        raise InputError(f"could not parse {p}")
+    if not mol.GetNumConformers():
+        raise InputError(f"{p} has no coordinates")
+    if not mol.GetConformer().Is3D():
+        raise InputError(f"{p} holds 2D coordinates; embed it first")
+    return mol
+
+
+def _mol_from_cif(path: Path) -> Chem.Mol | None:
+    """Read an mmCIF by converting it to PDB with gemmi first.
+
+    RDKit has no mmCIF reader, and gemmi is already a dependency of the writer,
+    so a round trip through PDB is the shortest correct path.
+    """
+    try:
+        import gemmi
+    except ImportError as exc:
+        raise InputError(
+            "reading mmCIF needs gemmi. Install it with: pip install gemmi"
+        ) from exc
+    try:
+        structure = gemmi.read_structure(str(path))
+    except Exception as exc:
+        raise InputError(f"gemmi could not read {path}: {exc}") from exc
+
+    structure.setup_entities()
+
+    # Build from model 0 alone. Handing RDKit the whole multi-model PDB makes it
+    # read every MODEL as a conformer, and the loop below would then add them a
+    # second time — four conformers in, seven out.
+    mol = Chem.MolFromPDBBlock(
+        _single_model_pdb(structure, 0), sanitize=False, removeHs=False
+    )
+    if mol is None:
+        return None
+
+    # Going via PDB loses bond orders, but an mmCIF we wrote carries them in a
+    # `_chem_comp_bond` loop. Without this the double bond of a ketone comes
+    # back as a single bond and the molecule is quietly wrong.
+    _apply_cif_bond_orders(mol, path)
+
+    with rdkit_quiet():
+        try:
+            Chem.SanitizeMol(mol)
+        except Exception as exc:
+            raise InputError(f"{path} did not sanitize after reading: {exc}") from exc
+        Chem.AssignStereochemistryFrom3D(mol)
+
+    # Later models are conformers of the same molecule.
+    for index in range(1, len(structure)):
+        extra = Chem.MolFromPDBBlock(
+            _single_model_pdb(structure, index), sanitize=False, removeHs=False
+        )
+        if extra is not None and extra.GetNumAtoms() == mol.GetNumAtoms():
+            mol.AddConformer(Chem.Conformer(extra.GetConformer()), assignId=True)
+    return mol
+
+
+def _single_model_pdb(structure, index: int) -> str:
+    """PDB text for exactly one model of a gemmi structure."""
+    import gemmi
+
+    one = gemmi.Structure()
+    one.add_model(structure[index])
+    one.setup_entities()
+    return one.make_pdb_string()
+
+
+_CIF_ORDER_TO_BOND = {
+    "SING": Chem.BondType.SINGLE,
+    "DOUB": Chem.BondType.DOUBLE,
+    "TRIP": Chem.BondType.TRIPLE,
+    "QUAD": Chem.BondType.QUADRUPLE,
+}
+
+
+def _apply_cif_bond_orders(mol: Chem.Mol, path: Path) -> None:
+    """Restore bond orders from an mmCIF `_chem_comp_bond` loop, if present.
+
+    Matches on atom name, which is why the writer assigns unique names. Silent
+    no-op for an mmCIF that has no such loop — a coordinates-only file from
+    elsewhere still reads, just without bond orders, exactly like a PDB.
+    """
+    import gemmi
+
+    try:
+        block = gemmi.cif.read(str(path)).sole_block()
+        table = block.find(
+            "_chem_comp_bond.",
+            ["atom_id_1", "atom_id_2", "value_order", "?pdbx_aromatic_flag"],
+        )
+    except Exception:
+        return
+    if not len(table):
+        return
+
+    by_name: dict[str, int] = {}
+    for atom in mol.GetAtoms():
+        info = atom.GetMonomerInfo()
+        if info is not None:
+            by_name[info.GetName().strip()] = atom.GetIdx()
+
+    for row in table:
+        first, second = by_name.get(row.str(0)), by_name.get(row.str(1))
+        if first is None or second is None:
+            continue
+        bond = mol.GetBondBetweenAtoms(first, second)
+        if bond is None:
+            continue
+        aromatic = row.has(3) and row.str(3).upper().startswith("Y")
+        if aromatic:
+            bond.SetBondType(Chem.BondType.AROMATIC)
+            bond.SetIsAromatic(True)
+            mol.GetAtomWithIdx(first).SetIsAromatic(True)
+            mol.GetAtomWithIdx(second).SetIsAromatic(True)
+        else:
+            bond.SetBondType(
+                _CIF_ORDER_TO_BOND.get(row.str(2).upper(), Chem.BondType.SINGLE)
+            )

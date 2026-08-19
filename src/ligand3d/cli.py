@@ -104,10 +104,41 @@ def build(
     resname: Optional[str] = typer.Option(
         None, "--resname", help="PDB residue name (3 characters). Defaults to LIG."
     ),
+    formats: str = typer.Option(
+        "cif,sdf",
+        "--format",
+        "-f",
+        help="Comma-separated outputs: cif, pdb, sdf. mmCIF is the default because "
+        "it carries the bond orders PDB cannot.",
+    ),
     no_sdf: bool = typer.Option(False, "--no-sdf", help="Do not write the .sdf sidecar."),
+    trace: bool = typer.Option(
+        False,
+        "--trace",
+        help="Log the energy at every optimizer step, with the change from the "
+        "previous step. Slower, so off by default.",
+    ),
+    trajectory: bool = typer.Option(
+        False,
+        "--trajectory",
+        help="Save the geometry at every step as <name>_traj.pdb, one MODEL per step.",
+    ),
+    make_params: bool = typer.Option(
+        False, "--params", help="Also generate a Rosetta params file."
+    ),
+    params_code: Optional[str] = typer.Option(
+        None,
+        "--params-code",
+        help="Three-character Rosetta ligand code. Defaults to the residue name.",
+    ),
+    allow_code_conflict: bool = typer.Option(
+        False,
+        "--allow-code-conflict",
+        help="Generate params even if the code already exists in Rosetta.",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Only print the output path."),
 ) -> None:
-    """Build a minimized 3D structure and write it as PDB."""
+    """Build a minimized 3D structure. Writes mmCIF by default."""
     from .pipeline import Settings, run
 
     if stereo not in ("require", "any", "enumerate"):
@@ -119,6 +150,8 @@ def build(
         ph = DEFAULT_PH
     if enumerate_states and ph is None:
         _fail(ValueError("--enumerate-states needs a pH; add --ph <value> or --protonate"))
+
+    chosen = _parse_formats(formats, want_sdf=not no_sdf)
 
     settings = Settings(
         backend=backend,
@@ -138,14 +171,21 @@ def build(
         seed=seed,
         n_threads=threads,
         resname=resname,
-        write_sdf=not no_sdf,
+        formats=chosen,
+        trace=trace,
+        trajectory=trajectory,
+        params=make_params,
+        params_code=params_code,
+        allow_code_conflict=allow_code_conflict,
     )
 
     try:
         mol = read_input(molecule)
-        target = output or Path(f"{mol.name.lower()}.pdb")
-        if target.suffix.lower() != ".pdb":
-            target = target.with_suffix(".pdb")
+        target = output or Path(f"{mol.name.lower()}.{chosen[0]}")
+        # An explicit extension is a format request, so honour it.
+        suffix = target.suffix.lower().lstrip(".")
+        if suffix in ("cif", "pdb", "sdf") and suffix not in settings.formats:
+            settings.formats = (suffix, *settings.formats)
         outcomes = run(mol, settings, output=target)
     except Ligand3DError as exc:
         _fail(exc)
@@ -153,11 +193,12 @@ def build(
 
     if quiet:
         for outcome in outcomes:
-            console.print(str(outcome.pdb_path))
+            if outcome.primary_path:
+                console.print(str(outcome.primary_path))
         return
 
     console.print(f"[bold]{mol.formula}[/bold]  {mol.smiles}")
-    console.print(f"  stereo: {mol.stereo.describe()}")
+    _print_stereo(mol)
     for outcome in outcomes:
         console.print()
         if len(outcomes) > 1:
@@ -185,9 +226,85 @@ def build(
                     + (" ..." if len(spread) > 8 else "")
                     + f" {unit}"
                 )
-        console.print(f"  [green]wrote[/green] {outcome.pdb_path}")
-        if outcome.sdf_path:
-            console.print(f"  [green]wrote[/green] {outcome.sdf_path}")
+        if trace and outcome.trace:
+            _print_trace(outcome.trace)
+        for path in outcome.written():
+            console.print(f"  [green]wrote[/green] {path}")
+
+
+def _print_stereo(mol) -> None:
+    """Report stereochemistry: centres with CIP codes, bonds with E/Z."""
+    from .molecule import describe_double_bonds
+
+    audit = mol.stereo
+    if audit.assigned_centers:
+        detail = ", ".join(f"atom {i} = {code}" for i, code in audit.assigned_centers)
+        console.print(f"  {len(audit.assigned_centers)} stereocenter(s): {detail}")
+    else:
+        console.print("  no stereocenters defined")
+
+    for report in describe_double_bonds(mol):
+        if report.cis_trans:
+            gloss = f"[bold]{report.cip}[/bold] ({report.cis_trans})"
+        else:
+            gloss = (
+                f"[bold]{report.cip}[/bold] "
+                f"[dim](cis/trans does not apply: {report._why} alkene)[/dim]"
+            )
+        console.print(f"  double bond {report.begin}-{report.end}: {gloss}")
+
+    if audit.unassigned_centers:
+        from .molecule import has_real_stereo_ambiguity
+
+        if has_real_stereo_ambiguity(mol):
+            atoms = ", ".join(str(i) for i in audit.unassigned_centers)
+            console.print(f"  [yellow]undefined stereocenter(s): atom {atoms}[/yellow]")
+        else:
+            console.print(
+                f"  [dim]{len(audit.unassigned_centers)} atom(s) look stereogenic but "
+                f"are fixed by the ring system[/dim]"
+            )
+
+
+def _parse_formats(spec: str, want_sdf: bool = True) -> tuple[str, ...]:
+    """Validate and normalize a --format list."""
+    known = ("cif", "pdb", "sdf")
+    chosen = [f.strip().lower() for f in spec.split(",") if f.strip()]
+    chosen = ["cif" if f == "mmcif" else f for f in chosen]
+    bad = [f for f in chosen if f not in known]
+    if bad:
+        _fail(ValueError(f"unknown format(s) {', '.join(bad)}. Choose from: {', '.join(known)}"))
+    if not want_sdf:
+        chosen = [f for f in chosen if f != "sdf"]
+    if not chosen:
+        _fail(ValueError("no output formats left to write"))
+    # Preserve order but drop repeats; the first entry is the primary output.
+    return tuple(dict.fromkeys(chosen))
+
+
+def _print_trace(trace: list, limit: int = 12) -> None:
+    """Show the energy path, one block per method in the chain."""
+    by_stage: dict[int, list] = {}
+    for step in trace:
+        by_stage.setdefault(step.stage, []).append(step)
+
+    for stage in sorted(by_stage):
+        steps = by_stage[stage]
+        name = steps[0].backend
+        unit = steps[0].energy_unit
+        kind = "total" if steps[0].energy_kind == "total" else "strain"
+        total = steps[-1].energy - steps[0].energy
+        console.print(
+            f"  [bold]{name}[/bold] — {len(steps)} step(s), {kind} energy in {unit}, "
+            f"net {total:+.4f}"
+        )
+        shown = steps if len(steps) <= limit else [*steps[: limit // 2], None, *steps[-limit // 2 :]]
+        for step in shown:
+            if step is None:
+                console.print(f"      [dim]… {len(steps) - limit} step(s) omitted …[/dim]")
+                continue
+            delta = "        —" if step.delta is None else f"{step.delta:+9.4f}"
+            console.print(f"      step {step.step:4d}  E {step.energy:14.5f}  dE {delta}")
 
 
 @app.command()
@@ -375,3 +492,300 @@ def version() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     app()
+
+
+# --------------------------------------------------------------------------
+# Individual pipeline steps, for scripting one stage at a time
+# --------------------------------------------------------------------------
+
+
+@app.command()
+def stereo(
+    molecule: str = typer.Argument(..., help="SMILES, or a .mol/.sdf/.pdb/.cif file."),
+) -> None:
+    """Report the stereochemistry of a molecule and exit.
+
+    Stereocenters with CIP codes, double bonds with E/Z, and cis/trans where
+    that term actually applies.
+    """
+    try:
+        mol = read_input(molecule)
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+    console.print(f"[bold]{mol.formula}[/bold]  {mol.smiles}")
+    _print_stereo(mol)
+
+
+@app.command()
+def embed(
+    molecule: str = typer.Argument(..., help="SMILES, or a .mol/.sdf file."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output path."),
+    confs: int = typer.Option(1, "--confs", "-n", min=1, help="How many conformers."),
+    formats: str = typer.Option("cif,sdf", "--format", "-f", help="cif, pdb, sdf."),
+    stereo_mode: str = typer.Option("require", "--stereo", help="require | any | enumerate"),
+    seed: int = typer.Option(0xF00D, "--seed", help="Random seed."),
+    resname: Optional[str] = typer.Option(None, "--resname", help="PDB residue name."),
+) -> None:
+    """2D to 3D only: embed coordinates and write them, with no minimization.
+
+    Useful when you want the raw ETKDG geometry, or want to minimize separately.
+    """
+    from .pipeline import Settings, run
+
+    chosen = _parse_formats(formats)
+    settings = Settings(
+        backend="mmff94", n_confs=confs, stereo_mode=stereo_mode, seed=seed,
+        resname=resname, formats=chosen, max_steps=0,
+    )
+    try:
+        mol = read_input(molecule)
+        target = output or Path(f"{mol.name.lower()}.{chosen[0]}")
+        outcomes = run(mol, settings, output=target)
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+    console.print(f"[bold]{mol.formula}[/bold]  {mol.smiles}")
+    _print_stereo(mol)
+    for outcome in outcomes:
+        console.print(f"  embedded {outcome.mol_3d.GetNumConformers()} conformer(s)")
+        for path in outcome.written():
+            console.print(f"  [green]wrote[/green] {path}")
+
+
+@app.command()
+def minimize(
+    structure: Path = typer.Argument(..., help="A 3D .sdf/.mol/.pdb/.cif file."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output path."),
+    backend: str = typer.Option("mmff94", "--backend", "-b", help="Backend or chain."),
+    formats: str = typer.Option("cif,sdf", "--format", "-f", help="cif, pdb, sdf."),
+    solvent: Optional[str] = typer.Option(None, "--solvent", help="Implicit solvent."),
+    max_steps: int = typer.Option(500, "--max-steps", help="Optimizer step limit."),
+    trace: bool = typer.Option(False, "--trace", help="Log energy at every step."),
+    trajectory: bool = typer.Option(False, "--trajectory", help="Save the step geometries."),
+    threads: int = typer.Option(1, "--threads", "-j", min=1, help="Threads."),
+    resname: Optional[str] = typer.Option(None, "--resname", help="PDB residue name."),
+) -> None:
+    """Minimize a structure that already has 3D coordinates.
+
+    Every conformer in the input file is minimized.
+    """
+    import time
+
+    from .minimize import MinimizeJob, get_backend, parse_chain
+    from .molecule import read_3d
+    from .write import ConformerRecord
+
+    chosen = _parse_formats(formats)
+    try:
+        mol = read_3d(structure)
+        backends = [get_backend(name) for name in parse_chain(backend)]
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+
+    from rdkit import Chem
+
+    charge = Chem.GetFormalCharge(mol)
+    console.print(
+        f"[bold]{structure}[/bold]: {mol.GetNumAtoms()} atoms, "
+        f"{mol.GetNumConformers()} conformer(s), charge {charge:+d}"
+    )
+
+    started = time.perf_counter()
+    records, all_trace, frames = [], [], []
+    try:
+        for index, conformer in enumerate(mol.GetConformers()):
+            cid = conformer.GetId()
+            result = None
+            for stage, chosen_backend in enumerate(backends):
+                job = MinimizeJob(
+                    mol=mol, conf_id=cid, charge=charge, max_steps=max_steps,
+                    solvent=solvent, n_threads=threads,
+                    trace=trace and index == 0, trajectory=trajectory and index == 0,
+                    stage=stage,
+                )
+                result = chosen_backend.minimize(job)
+                if index == 0:
+                    all_trace.extend(result.trace)
+                    frames.extend(result.frames)
+            if result is not None:
+                records.append(
+                    ConformerRecord(
+                        conf_id=cid, energy=result.energy, energy_unit=result.energy_unit,
+                        energy_kind=result.energy_kind, backend=result.backend,
+                        converged=result.converged,
+                    )
+                )
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+
+    if trace and all_trace:
+        _print_trace(all_trace)
+    if records:
+        best = min(r.energy for r in records)
+        kind = "total electronic" if records[0].energy_kind == "total" else "strain"
+        console.print(
+            f"  lowest {kind} energy {best:.4f} {records[0].energy_unit} "
+            f"({records[0].backend})"
+        )
+    console.print(f"  total time {time.perf_counter() - started:.2f}s")
+
+    base = output or structure.with_name(f"{structure.stem}_min.{chosen[0]}")
+    _write_plain(base, mol, records, chosen, resname or "LIG", frames if trajectory else [],
+                 all_trace)
+
+
+def _write_plain(base, mol, records, formats, resname, frames, trace) -> None:
+    """Write a bare molecule (no pipeline Outcome) in the chosen formats."""
+    from .write import write_cif, write_pdb, write_sdf, write_trajectory
+
+    writers = {"cif": write_cif, "pdb": write_pdb, "sdf": write_sdf}
+    for fmt in formats:
+        writer = writers[fmt]
+        if fmt == "sdf":
+            path = writer(base.with_suffix(".sdf"), mol, records=records, name=resname)
+        else:
+            path = writer(base.with_suffix(f".{fmt}"), mol, records=records, resname=resname)
+        console.print(f"  [green]wrote[/green] {path}")
+    if frames:
+        path = write_trajectory(
+            base.with_name(f"{base.stem}_traj.pdb"), mol, frames, resname=resname,
+            energies=[s.energy for s in trace] or None,
+            stage_labels=[f"stage {s.stage}: {s.backend}" for s in trace] or None,
+        )
+        console.print(f"  [green]wrote[/green] {path} ({len(frames)} frames)")
+
+
+@app.command()
+def conformers(
+    molecule: str = typer.Argument(..., help="SMILES, or a 3D/2D structure file."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output path."),
+    confs: int = typer.Option(20, "--confs", "-n", min=1, help="Conformers to keep."),
+    method: str = typer.Option("rdkit", "--method", help="rdkit or crest."),
+    backend: str = typer.Option("mmff94", "--backend", "-b", help="Backend for ranking."),
+    prune_rms: float = typer.Option(0.5, "--prune-rms", help="Duplicate RMSD threshold."),
+    energy_window: Optional[float] = typer.Option(None, "--energy-window", help="kcal/mol."),
+    formats: str = typer.Option("cif,sdf", "--format", "-f", help="cif, pdb, sdf."),
+    threads: int = typer.Option(1, "--threads", "-j", min=1, help="Threads."),
+    resname: Optional[str] = typer.Option(None, "--resname", help="PDB residue name."),
+) -> None:
+    """Conformer search, ranked by energy and de-duplicated by RMSD."""
+    from .pipeline import Settings, run
+
+    chosen = _parse_formats(formats)
+    settings = Settings(
+        backend=backend, n_confs=confs, conf_method=method, prune_rms=prune_rms,
+        energy_window=energy_window, formats=chosen, n_threads=threads, resname=resname,
+    )
+    try:
+        mol = read_input(molecule)
+        target = output or Path(f"{mol.name.lower()}_confs.{chosen[0]}")
+        outcomes = run(mol, settings, output=target)
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+    for outcome in outcomes:
+        for note in outcome.notes:
+            console.print(f"  · {note}")
+        energies = [r.energy for r in outcome.records if r.energy is not None]
+        if energies:
+            best = min(energies)
+            spread = ", ".join(f"{e - best:+.2f}" for e in energies[:10])
+            console.print(f"  {len(energies)} conformer(s); relative energies: {spread}")
+        for path in outcome.written():
+            console.print(f"  [green]wrote[/green] {path}")
+
+
+@app.command()
+def protonate(
+    molecule: str = typer.Argument(..., help="SMILES, or a .mol/.sdf file."),
+    ph: float = typer.Option(7.4, "--ph", help="pH at which to assign states."),
+    all_states: bool = typer.Option(False, "--all", help="List every plausible state."),
+) -> None:
+    """Report protonation states at a pH, without building anything in 3D."""
+    from .protonate import enumerate_states
+
+    try:
+        mol = read_input(molecule)
+        states = enumerate_states(mol, ph=ph)
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+
+    console.print(f"[bold]{mol.formula}[/bold]  {mol.smiles}  at pH {ph:g}")
+    shown = states if all_states else states[:1]
+    for index, state in enumerate(shown):
+        marker = "[green]->[/green]" if index == 0 else "  "
+        console.print(f"  {marker} {state.smiles}  (charge {state.charge:+d})")
+    if not all_states and len(states) > 1:
+        console.print(
+            f"  [dim]{len(states) - 1} other state(s) are plausible; pass --all to see them[/dim]"
+        )
+
+
+@app.command()
+def params(
+    structure: Path = typer.Argument(..., help="A 3D .sdf/.mol/.pdb/.cif file."),
+    code: str = typer.Option("LIG", "--code", "-c", help="Three-character ligand code."),
+    out_dir: Optional[Path] = typer.Option(None, "--out-dir", "-d", help="Where to write."),
+    no_conformers: bool = typer.Option(
+        False, "--no-conformers", help="Skip the rotamer library."
+    ),
+    allow_code_conflict: bool = typer.Option(
+        False, "--allow-code-conflict", help="Proceed even if the code exists in Rosetta."
+    ),
+) -> None:
+    """Generate a Rosetta params file from an existing 3D structure.
+
+    Extra conformers in the input become the rotamer library.
+    """
+    from . import params as params_mod
+    from .molecule import read_3d
+
+    try:
+        mol = read_3d(structure)
+        result = params_mod.generate(
+            mol,
+            code=code,
+            out_dir=out_dir or structure.parent,
+            conformers=not no_conformers and mol.GetNumConformers() > 1,
+            allow_code_conflict=allow_code_conflict,
+        )
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+
+    console.print(
+        f"[bold]{structure}[/bold]: {mol.GetNumAtoms()} atoms, "
+        f"{mol.GetNumConformers()} conformer(s)"
+    )
+    for line in params_mod.summarize(result):
+        prefix = "[green]wrote[/green]" if line.startswith("wrote ") else "·"
+        console.print(f"  {prefix} {line.removeprefix('wrote ')}")
+
+
+@app.command()
+def convert(
+    structure: Path = typer.Argument(..., help="A 3D .sdf/.mol/.pdb/.cif file."),
+    output: Path = typer.Argument(..., help="Output path; the suffix picks the format."),
+    resname: Optional[str] = typer.Option(None, "--resname", help="PDB residue name."),
+) -> None:
+    """Convert between mmCIF, PDB, and SDF, keeping bond orders where possible."""
+    from .molecule import read_3d
+
+    suffix = output.suffix.lower().lstrip(".")
+    suffix = "cif" if suffix == "mmcif" else suffix
+    if suffix not in ("cif", "pdb", "sdf"):
+        _fail(ValueError(f"cannot write {output.suffix!r}; choose .cif, .pdb, or .sdf"))
+    try:
+        mol = read_3d(structure)
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+    console.print(
+        f"[bold]{structure}[/bold] -> {output}  "
+        f"({mol.GetNumAtoms()} atoms, {mol.GetNumConformers()} conformer(s))"
+    )
+    _write_plain(output, mol, None, (suffix,), resname or "LIG", [], [])

@@ -7,11 +7,25 @@ It builds a 3D conformer, optionally sets the protonation state, minimizes with 
 level of theory you choose, optionally searches conformers, and writes a `.pdb`.
 
 ```bash
-ligand3d build "O=C1CN2CCC1CC2" -o quinuclidinone.pdb
-ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --backend gfn2 -o gabapentin.pdb
-ligand3d build "C[C@@H](O)[C@H](N)C(=O)O" --backend mmff94,gfn2 --confs 20 -o threonine.pdb
+ligand3d build "O=C1CN2CCC1CC2" -o quinuclidinone          # writes .cif + .sdf
+ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --backend gfn2 -o gabapentin
+ligand3d build "C[C@@H](O)[C@H](N)C(=O)O" --backend mmff94,gfn2 --confs 20 -o threonine
+ligand3d build "<smiles>" --params --params-code LIG        # + a Rosetta params file
+ligand3d build "<smiles>" --trace --trajectory              # energy per step, and the path
 ligand3d sketch                        # draw it, then the pipeline runs on what you drew
 ligand3d doctor                        # what's installed, what isn't, and why
+```
+
+Every stage is also its own command, so a script can run one step at a time:
+
+```bash
+ligand3d stereo     "C[C@@H](O)[C@H](N)C(=O)O"   # report R/S and E/Z, build nothing
+ligand3d protonate  "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --all
+ligand3d embed      "<smiles>" -o raw            # 2D -> 3D, no minimization
+ligand3d minimize   raw.sdf -o min --backend gfn2 --trace
+ligand3d conformers "<smiles>" -n 50 -o ensemble
+ligand3d params     ensemble.sdf --code LIG
+ligand3d convert    min.cif min.pdb
 ```
 
 ## Why this exists
@@ -193,20 +207,26 @@ ligand3d sketch -d ~/ligands -b gfn2     # preselect a directory and backend
 ligand3d sketch --no-browser             # print the URL (SSH port-forwarding)
 ```
 
-The page gives you:
+The page is laid out as editor on the left, work area on the right: settings grouped into
+four tabs (Output, Minimize, Chemistry, Rosetta) so the panel stays short, then the energy
+graph, then the run log. Both the editor and the log grow to fill the window.
 
-- **Output path and filename**, shown resolved in full before anything is written. Both
-  are editable. A directory that does not exist yet is flagged and created on build; an
-  unwritable location is an error before you waste time on a minimization.
-- **Auto-incrementing names** — `sketch0.pdb`, `sketch1.pdb`, and so on, skipping any
-  already present. If a build would replace an existing file you get a dialog listing
-  exactly which files, and nothing is written until you say so.
-- **Every build option**: the backend chain, implicit solvent, protonation mode and pH,
-  conformer count and search method, energy window, stereo policy, residue name,
-  threads, and the override switches. Each one maps to a `ligand3d build` flag.
-- **A run log** reporting how many stereocenters were found and their R/S assignments,
-  double-bond geometry, warnings such as more than one fragment in the drawing, any
-  error in full, and the path of every file written.
+- **Output path and formats**, shown resolved in full before anything is written. The name
+  field is a base name, since one build can produce an mmCIF, a PDB, an SDF, a trajectory
+  and a params set; tick the formats you want. A directory that does not exist yet is
+  flagged and created on build; an unwritable location is an error before you spend a
+  minimization on it.
+- **Auto-incrementing names** — `sketch0`, `sketch1`, skipping any base name already taken
+  in *any* format. If a build would replace existing files you get a dialog listing exactly
+  which, and nothing is written until you confirm.
+- **Every build option**, including the Rosetta params tab and the trace and trajectory
+  toggles. Each maps to a `ligand3d build` flag.
+- **An energy graph** when tracing is on: one curve per method, each plotted as the change
+  from its own first step (a strain energy and a total electronic energy share no scale),
+  with the step count and net change in the legend.
+- **A run log** reporting stereocenters with R/S, double bonds with E/Z and cis/trans,
+  warnings such as more than one fragment, any error in full, per-method timing, the total
+  time, and every file written. There is a Copy button.
 
 ### Drawing stereochemistry — wedges *and* dashes
 
@@ -248,9 +268,103 @@ ligand3d config --init
 
 ## Output
 
-A `.pdb` with unique atom names, CONECT records, formal charges, and provenance REMARKs.
-Multiple conformers become MODEL/ENDMDL records. An `.sdf` sidecar is written alongside,
-because PDB does not carry bond orders reliably and you will want them back.
+**mmCIF is the default.** It carries everything a PDB does *plus* the bond orders and
+aromaticity a PDB cannot, in a `_chem_comp_bond` loop, so a `.cif` from ligand3d reads
+back as the same molecule — double bonds and all. Multiple conformers become models
+tagged with `pdbx_PDB_model_num`. Provenance goes in a `_ligand3d` category.
+
+An `.sdf` rides along by default because RDKit round-trips it perfectly. PDB is written
+on request:
+
+```bash
+ligand3d build "<smiles>" -f cif,pdb,sdf -o thing    # all three
+ligand3d build "<smiles>" -o thing.pdb               # an explicit suffix selects a format
+```
+
+Nothing in the params path needs a PDB — `molfile_to_params` reads the SDF directly.
+
+PDB output has unique atom names, CONECT records, formal charges, and provenance REMARKs.
+Every file written is read back and checked before the command returns.
+
+## Rosetta params
+
+```bash
+ligand3d build "<smiles>" --confs 20 --params --params-code LIG
+ligand3d params ensemble.sdf --code LIG -d params/
+```
+
+This drives Rosetta's own `molfile_to_params.py` rather than reimplementing its atom
+typing. On top of it:
+
+- **Conformers become the rotamer library.** The ensemble ligand3d already generated is
+  fed in as a multi-entry SDF, and `PDB_ROTAMERS` is emitted.
+- **The conformer file is repaired.** `molfile_to_params` puts conformer 1 in `NAME.pdb`
+  and conformers 2..N in `NAME_conformers.pdb`, so the rotamer library is short by one
+  until the first is prepended. ligand3d does that and then *counts* the result — the
+  library is separated by `TER`, not `MODEL`, so the obvious check silently passes on an
+  empty file.
+- **The three-letter code is checked** against Rosetta's `residue_types.txt` before any
+  work happens. `--allow-code-conflict` overrides it. (`BZO` and `ALA` are both taken,
+  for instance.)
+- Atom names are preserved with `--keep-names`, so a constraint file that refers to them
+  keeps working.
+
+`ligand3d doctor` reports where it found `molfile_to_params.py`; override with
+`LIGAND3D_MOLFILE_TO_PARAMS` or `[rosetta]` in the config.
+
+## Watching the minimization
+
+Both are off by default because they cost time.
+
+```bash
+ligand3d build "<smiles>" --backend mmff94,gfn2 --trace --trajectory
+```
+
+`--trace` logs the energy at every optimizer step with the change from the previous step,
+kept **separate per method** — a chained `mmff94,gfn2` run reports two blocks with their
+own step counts and net changes, and no delta ever bridges the boundary, because a strain
+energy and a total electronic energy are not comparable. The total wall time and a
+per-method breakdown are always printed.
+
+`--trajectory` writes `<name>_traj.pdb`, one MODEL per step with the energy and the
+responsible method in REMARKs, so it animates in PyMOL or ChimeraX.
+
+One caveat worth knowing: RDKit's force fields have no per-step callback, so tracing them
+means asking for one iteration at a time, which restarts the optimizer's state and
+descends less efficiently. ligand3d finishes with an uninterrupted pass so the geometry
+you get is identical to an untraced run (verified to 1e-3 kcal/mol); tracing costs time
+and nothing else. GFN-FF cannot be traced at all — xtb optimizes inside its own process —
+and says so rather than inventing a curve.
+
+## Stereochemistry reporting
+
+```console
+$ ligand3d stereo "C[C@@H](O)[C@H](N)C(=O)O"
+C4H9NO3  C[C@@H](O)[C@H](N)C(=O)O
+  2 stereocenter(s): atom 1 = R, atom 3 = S
+
+$ ligand3d stereo "OC(=O)/C=C\C(=O)O"
+C4H4O4  O=C(O)/C=C\C(=O)O
+  double bond 3-4: Z (cis)
+```
+
+**E/Z and cis/trans are not synonyms**, and ligand3d only claims the second where it is
+defensible. E/Z comes from CIP priorities and is always well defined. cis/trans compares
+two *reference* substituents, which is only meaningful when it is obvious which two are
+meant — that is, when each alkene carbon carries exactly one hydrogen. There, Z is cis and
+E is trans, and both labels are printed.
+
+For a tri- or tetrasubstituted alkene "cis to what?" has no single answer, so only E/Z is
+reported:
+
+```console
+$ ligand3d stereo "CC/C(=C(\c1ccccc1)c1ccc(OCCN(C)C)cc1)c1ccccc1"
+  double bond 2-3: Z (cis/trans does not apply: tetrasubstituted alkene)
+```
+
+Tamoxifen is the standard trap: unambiguously (Z) by CIP, and described as "trans" in
+older literature with respect to the two phenyls. Both statements are about the same
+molecule.
 
 ## Built on
 

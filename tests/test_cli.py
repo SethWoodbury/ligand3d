@@ -25,48 +25,67 @@ def run(*args):
 
 class TestBuild:
     def test_builds_and_writes_both_files(self, tmp_path):
-        out = tmp_path / "q.pdb"
+        out = tmp_path / "q.cif"
         result = run("build", QUINUCLIDINONE, "-o", str(out))
         assert result.exit_code == 0, result.output
         assert out.exists()
         assert out.with_suffix(".sdf").exists()
 
-    def test_quiet_prints_only_the_path(self, tmp_path):
-        out = tmp_path / "q.pdb"
+    def test_quiet_prints_only_the_primary_path(self, tmp_path):
+        """mmCIF is the default, so that is the path a script wants back."""
+        out = tmp_path / "q.cif"
         result = run("build", QUINUCLIDINONE, "-o", str(out), "-q")
         assert result.exit_code == 0
         assert result.output.strip() == str(out)
 
     def test_no_sdf_suppresses_the_sidecar(self, tmp_path):
-        out = tmp_path / "q.pdb"
+        out = tmp_path / "q.cif"
         run("build", QUINUCLIDINONE, "-o", str(out), "--no-sdf")
         assert out.exists()
         assert not out.with_suffix(".sdf").exists()
 
-    def test_output_suffix_is_normalized(self, tmp_path):
-        result = run("build", QUINUCLIDINONE, "-o", str(tmp_path / "q.xyz"), "-q")
+    def test_explicit_suffix_selects_that_format(self, tmp_path):
+        """`-o thing.pdb` should produce a PDB even though mmCIF is the default."""
+        result = run("build", QUINUCLIDINONE, "-o", str(tmp_path / "q.pdb"), "-q")
         assert result.exit_code == 0
         assert (tmp_path / "q.pdb").exists()
 
+    def test_default_format_is_mmcif(self, tmp_path):
+        result = run("build", QUINUCLIDINONE, "-o", str(tmp_path / "q"), "-q")
+        assert result.exit_code == 0
+        assert (tmp_path / "q.cif").exists()
+        assert not (tmp_path / "q.pdb").exists()
+
+    def test_format_flag_controls_what_is_written(self, tmp_path):
+        run("build", QUINUCLIDINONE, "-o", str(tmp_path / "q"), "-f", "pdb,sdf", "-q")
+        assert (tmp_path / "q.pdb").exists()
+        assert (tmp_path / "q.sdf").exists()
+        assert not (tmp_path / "q.cif").exists()
+
+    def test_unknown_format_is_rejected(self, tmp_path):
+        result = run("build", QUINUCLIDINONE, "-o", str(tmp_path / "q"), "-f", "xyz")
+        assert result.exit_code == 1
+        assert "unknown format" in result.output
+
     def test_bad_smiles_exits_nonzero(self, tmp_path):
-        result = run("build", "not a molecule", "-o", str(tmp_path / "x.pdb"))
+        result = run("build", "not a molecule", "-o", str(tmp_path / "x.cif"))
         assert result.exit_code == 1
         assert "error" in result.output.lower()
 
     def test_undefined_stereo_exits_nonzero(self, tmp_path):
-        result = run("build", "CC(N)C(=O)O", "-o", str(tmp_path / "a.pdb"))
+        result = run("build", "CC(N)C(=O)O", "-o", str(tmp_path / "a.cif"))
         assert result.exit_code == 1
         assert "stereocenter" in result.output.lower()
 
     def test_unknown_backend_exits_nonzero(self, tmp_path):
         result = run(
-            "build", QUINUCLIDINONE, "-o", str(tmp_path / "q.pdb"), "--backend", "nope"
+            "build", QUINUCLIDINONE, "-o", str(tmp_path / "q.cif"), "--backend", "nope"
         )
         assert result.exit_code == 1
 
     def test_invalid_stereo_mode_is_rejected(self, tmp_path):
         result = run(
-            "build", QUINUCLIDINONE, "-o", str(tmp_path / "q.pdb"), "--stereo", "sideways"
+            "build", QUINUCLIDINONE, "-o", str(tmp_path / "q.cif"), "--stereo", "sideways"
         )
         assert result.exit_code == 1
 
@@ -83,7 +102,7 @@ class TestProtonationFlags:
     def test_protonate_is_shorthand_for_ph_7_4(self, tmp_path):
         from rdkit import Chem
 
-        out = tmp_path / "g.pdb"
+        out = tmp_path / "g.cif"
         assert run("build", GABAPENTIN, "-o", str(out), "--protonate", "-q").exit_code == 0
 
         built = next(iter(Chem.SDMolSupplier(str(out.with_suffix(".sdf")), removeHs=False)))
@@ -94,7 +113,7 @@ class TestProtonationFlags:
     def test_explicit_ph_is_honoured(self, tmp_path):
         from rdkit import Chem
 
-        out = tmp_path / "g.pdb"
+        out = tmp_path / "g.cif"
         assert run("build", GABAPENTIN, "-o", str(out), "--ph", "2.0", "-q").exit_code == 0
 
         built = next(iter(Chem.SDMolSupplier(str(out.with_suffix(".sdf")), removeHs=False)))
@@ -102,14 +121,14 @@ class TestProtonationFlags:
 
     def test_contradictory_ph_and_protonate_are_rejected(self, tmp_path):
         result = run(
-            "build", GABAPENTIN, "-o", str(tmp_path / "g.pdb"), "--protonate", "--ph", "2.0"
+            "build", GABAPENTIN, "-o", str(tmp_path / "g.cif"), "--protonate", "--ph", "2.0"
         )
         assert result.exit_code == 1
         assert "--protonate" in result.output
 
     def test_enumerate_states_without_a_ph_is_rejected(self, tmp_path):
         result = run(
-            "build", GABAPENTIN, "-o", str(tmp_path / "g.pdb"), "--enumerate-states"
+            "build", GABAPENTIN, "-o", str(tmp_path / "g.cif"), "--enumerate-states"
         )
         assert result.exit_code == 1
         assert "needs a pH" in result.output
@@ -117,7 +136,7 @@ class TestProtonationFlags:
     def test_default_leaves_the_molecule_as_drawn(self, tmp_path):
         from rdkit import Chem
 
-        out = tmp_path / "g.pdb"
+        out = tmp_path / "g.cif"
         run("build", GABAPENTIN, "-o", str(out), "-q")
         built = next(iter(Chem.SDMolSupplier(str(out.with_suffix(".sdf")), removeHs=False)))
         assert all(a.GetFormalCharge() == 0 for a in built.GetAtoms())

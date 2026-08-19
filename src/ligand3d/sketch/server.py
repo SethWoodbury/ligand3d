@@ -224,8 +224,8 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json()
             info = inspect_target(
                 data.get("directory", "."),
-                data.get("filename", "sketch0.pdb"),
-                write_sdf=bool(data.get("write_sdf", True)),
+                data.get("filename", "sketch0"),
+                formats=data.get("formats"),
             )
             self._json(info.to_json())
             return
@@ -245,8 +245,8 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         settings = data.get("settings") or {}
         info = inspect_target(
             settings.get("directory", "."),
-            settings.get("filename", "sketch0.pdb"),
-            write_sdf=bool(settings.get("write_sdf", True)),
+            settings.get("filename", "sketch0"),
+            formats=settings.get("formats"),
         )
         if info.error:
             self._json({"error": info.error}, 400)
