@@ -124,7 +124,17 @@
     display: flex; align-items: center; justify-content: center;
     min-height: 210px; padding: .3rem; overflow: hidden;
   }
+  #previewBox { position: relative; }
   #previewBox svg { max-width: 100%; height: auto; display: block; }
+  #previewStats {
+    position: absolute; left: .5rem; bottom: .4rem; pointer-events: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .7rem; line-height: 1.35; color: var(--muted);
+    background: color-mix(in srgb, var(--soft) 82%, transparent);
+    border: 1px solid var(--line); border-radius: 4px; padding: .22rem .4rem;
+  }
+  #previewStats b { color: var(--fg); font-weight: 640; }
+  #previewStats .chg { color: var(--warn); }
   #previewMsg { font-size: .75rem; color: var(--muted); margin-top: .4rem; }
   #previewMsg .bad { color: var(--warn); }
   #previewMsg .err { color: var(--err); }
@@ -147,10 +157,13 @@
   footer a:hover { text-decoration: underline; }
 
   #plotCard { display: none; }
-  #plot { width: 100%; height: 190px; display: block; }
+  #plot { width: 100%; height: 230px; display: block; }
   #plot text { font: 10px ui-monospace, monospace; fill: var(--muted); }
   #plot .grid { stroke: var(--line); stroke-width: 1; }
   #plot .axis { stroke: var(--border); stroke-width: 1; }
+  #plot .zero { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
+  #plot .divider { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 4; opacity: .8; }
+  #plot .axlabel { font-size: 10px; fill: var(--muted); }
   .legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .74rem; margin-top: .3rem; }
   .legend span { display: flex; align-items: center; gap: .3rem; color: var(--muted); }
   .swatch { width: .7rem; height: .18rem; border-radius: 2px; display: inline-block; }
@@ -218,7 +231,10 @@
           <input type="checkbox" id="showIndices" checked> atom numbers
         </label>
       </div>
-      <div id="previewBox"><span style="color:var(--muted);font-size:.78rem">draw something to see it here</span></div>
+      <div id="previewBox">
+        <span style="color:var(--muted);font-size:.78rem">draw something to see it here</span>
+        <div id="previewStats" hidden></div>
+      </div>
       <div class="keyrow">
         <span><i class="dot" style="background:#f28c26"></i>needs a configuration</span>
         <span><i class="dot" style="background:#40a674"></i>already specified</span>
@@ -256,6 +272,7 @@
           <label><input type="checkbox" id="fmt_sdf" checked> SDF</label>
           <label><input type="checkbox" id="fmt_pdb"> PDB</label>
         </div>
+        <div class="note" id="formatNote"></div>
         <div class="checks">
           <label><input type="checkbox" id="autoname" checked> auto-increment the name after each build</label>
         </div>
@@ -540,7 +557,25 @@ async function refreshPreview() {
   }
 
   box.innerHTML = data.svg;
-  smi.textContent = (data.formula ? data.formula + "   " : "") + (data.smiles || "");
+
+  // formula / MW / charge, tucked into the bottom-left of the drawing
+  const stats = document.createElement("div");
+  stats.id = "previewStats";
+  const bits = [];
+  if (data.formula) bits.push("<b>" + data.formula + "</b>");
+  if (data.mw != null) bits.push("MW " + data.mw.toFixed(2));
+  if (data.charge != null) {
+    const q = data.charge > 0 ? "+" + data.charge : String(data.charge);
+    const zwit = data.zwitterion ? " zwitterion" : "";
+    const cls = (data.charge !== 0 || data.zwitterion) ? ' class="chg"' : "";
+    bits.push("<span" + cls + ">charge " + q + zwit + "</span>");
+  }
+  if (data.n_fragments > 1)
+    bits.push('<span class="chg">' + data.n_fragments + " fragments</span>");
+  stats.innerHTML = bits.join("<br>");
+  if (bits.length) box.appendChild(stats);
+
+  smi.textContent = data.smiles || "";
 
   const lines = [];
   (data.advice || []).forEach((a) => lines.push('<span class="bad">' + a + "</span>"));
@@ -582,7 +617,8 @@ async function checkPath() {
   const formats = chosenFormats();
   const preview = el("pathPreview");
   if (!formats.length) {
-    preview.innerHTML = '<span class="err">pick at least one output format</span>';
+    preview.innerHTML = '<span class="warn">dry run: the molecule will be built, ' +
+      "checked and logged, and no file will be written.</span>";
     return null;
   }
   try {
@@ -659,10 +695,8 @@ async function build(overwrite) {
     logLine("nothing on the canvas.", "warn");
     return;
   }
-  if (!chosenFormats().length) { setStatus("pick an output format"); return; }
-
   buildBtn.disabled = true;
-  setStatus("building...");
+  setStatus(chosenFormats().length ? "building..." : "dry run...");
   try {
     const res = await fetch("/api/build", {
       method: "POST",
@@ -724,51 +758,107 @@ function drawPlot(trace) {
   const svg = el("plot");
   if (!trace || !trace.length) { card.style.display = "none"; return; }
 
-  // One series per stage. A strain energy and a total electronic energy share no
-  // scale, so each curve is plotted as the change from its own first step —
-  // otherwise one method's absolute value flattens the other into a line.
+  // The stages run one after another, so the x axis is the cumulative step
+  // count: a second method that took 20 steps after 502 of the first is drawn
+  // at 502..522, not back at zero.
+  //
+  // The y axis is the change from each stage's OWN first step. Absolute
+  // energies from two methods are not comparable — a strain energy near zero
+  // and a total electronic energy near -253000 cannot share an axis — but the
+  // *changes* are both kcal/mol and can. The curves are deliberately not joined
+  // end to end: that would read as one continuous descent and imply the two
+  // drops add up, which they do not.
   const stages = Array.from(new Set(trace.map((s) => s.stage))).sort((a, b) => a - b);
+  let offset = 0;
   const series = stages.map((stage) => {
     const steps = trace.filter((s) => s.stage === stage);
     const first = steps[0].energy;
-    return {
+    const points = steps.map((s, i) => ({ x: offset + i, y: s.energy - first }));
+    const entry = {
       backend: steps[0].backend,
       unit: steps[0].energy_unit,
-      points: steps.map((s, i) => ({ x: i, y: s.energy - first })),
+      kind: steps[0].energy_kind,
+      points: points,
       net: steps[steps.length - 1].energy - first,
+      absFirst: first,
+      absLast: steps[steps.length - 1].energy,
       count: steps.length,
+      start: offset,
+      end: offset + steps.length - 1,
     };
+    offset += steps.length;
+    return entry;
   });
 
-  const W = 560, H = 190, PAD_L = 54, PAD_R = 10, PAD_T = 12, PAD_B = 26;
-  const maxX = Math.max(1, ...series.map((s) => s.points.length - 1));
+  const W = 580, H = 230, PAD_L = 64, PAD_R = 12, PAD_T = 14, PAD_B = 40;
+  const maxX = Math.max(1, offset - 1);
   const allY = series.reduce((acc, s) => acc.concat(s.points.map((p) => p.y)), []);
-  const minY = Math.min(0, ...allY), maxY = Math.max(0, ...allY);
+  let minY = Math.min(0, ...allY), maxY = Math.max(0, ...allY);
+  const pad = (maxY - minY) * 0.06 || 0.5;
+  minY -= pad; maxY += pad;
   const spanY = (maxY - minY) || 1;
   const sx = (x) => PAD_L + (x / maxX) * (W - PAD_L - PAD_R);
   const sy = (y) => H - PAD_B - ((y - minY) / spanY) * (H - PAD_T - PAD_B);
 
   const parts = [];
-  for (let i = 0; i <= 4; i++) {
-    const y = minY + (spanY * i) / 4;
+
+  // y gridlines and ticks
+  const Y_TICKS = 6;
+  for (let i = 0; i <= Y_TICKS; i++) {
+    const y = minY + (spanY * i) / Y_TICKS;
     const py = sy(y).toFixed(1);
     parts.push('<line class="grid" x1="' + PAD_L + '" y1="' + py +
                '" x2="' + (W - PAD_R) + '" y2="' + py + '"/>');
-    parts.push('<text x="' + (PAD_L - 6) + '" y="' + (sy(y) + 3).toFixed(1) +
+    parts.push('<line class="axis" x1="' + (PAD_L - 4) + '" y1="' + py +
+               '" x2="' + PAD_L + '" y2="' + py + '"/>');
+    parts.push('<text x="' + (PAD_L - 7) + '" y="' + (sy(y) + 3.2).toFixed(1) +
                '" text-anchor="end">' + fmtShort(y) + "</text>");
+  }
+  // the zero line, since every stage starts there
+  if (minY < 0 && maxY > 0) {
+    parts.push('<line class="zero" x1="' + PAD_L + '" y1="' + sy(0).toFixed(1) +
+               '" x2="' + (W - PAD_R) + '" y2="' + sy(0).toFixed(1) + '"/>');
+  }
+
+  // x ticks
+  const X_TICKS = Math.min(10, maxX);
+  for (let i = 0; i <= X_TICKS; i++) {
+    const x = Math.round((maxX * i) / X_TICKS);
+    const px = sx(x).toFixed(1);
+    parts.push('<line class="axis" x1="' + px + '" y1="' + (H - PAD_B) +
+               '" x2="' + px + '" y2="' + (H - PAD_B + 4) + '"/>');
+    parts.push('<text x="' + px + '" y="' + (H - PAD_B + 15) +
+               '" text-anchor="middle">' + x + "</text>");
   }
   parts.push('<line class="axis" x1="' + PAD_L + '" y1="' + (H - PAD_B) +
              '" x2="' + (W - PAD_R) + '" y2="' + (H - PAD_B) + '"/>');
-  parts.push('<text x="' + PAD_L + '" y="' + (H - 8) + '">step 0</text>');
-  parts.push('<text x="' + (W - PAD_R) + '" y="' + (H - 8) +
-             '" text-anchor="end">step ' + maxX + "</text>");
+  parts.push('<line class="axis" x1="' + PAD_L + '" y1="' + PAD_T +
+             '" x2="' + PAD_L + '" y2="' + (H - PAD_B) + '"/>');
 
+  // axis labels
+  parts.push('<text x="' + ((PAD_L + W - PAD_R) / 2) + '" y="' + (H - 6) +
+             '" text-anchor="middle" class="axlabel">optimizer step (cumulative)</text>');
+  parts.push('<text class="axlabel" transform="translate(13,' +
+             ((PAD_T + H - PAD_B) / 2) + ') rotate(-90)" text-anchor="middle">' +
+             "\u0394E from each stage&#39;s start (kcal/mol)</text>");
+
+  // stage boundaries
+  series.forEach((s, i) => {
+    if (i === 0) return;
+    const px = sx(s.start).toFixed(1);
+    parts.push('<line class="divider" x1="' + px + '" y1="' + PAD_T +
+               '" x2="' + px + '" y2="' + (H - PAD_B) + '"/>');
+  });
+
+  // the curves, plus a hollow marker at each stage's own zero
   series.forEach((s, i) => {
     const color = "var(" + STAGE_COLORS[i % STAGE_COLORS.length] + ")";
     const d = s.points.map((p, k) =>
       (k ? "L" : "M") + sx(p.x).toFixed(1) + "," + sy(p.y).toFixed(1)).join(" ");
     parts.push('<path d="' + d + '" fill="none" stroke="' + color +
-               '" stroke-width="1.8" stroke-linejoin="round"/>');
+               '" stroke-width="1.9" stroke-linejoin="round"/>');
+    parts.push('<circle cx="' + sx(s.start).toFixed(1) + '" cy="' + sy(0).toFixed(1) +
+               '" r="2.6" fill="none" stroke="' + color + '" stroke-width="1.4"/>');
   });
 
   svg.setAttribute("viewBox", "0 0 " + W + " " + H);
@@ -777,20 +867,28 @@ function drawPlot(trace) {
   el("plotLegend").innerHTML = series.map((s, i) => {
     const color = "var(" + STAGE_COLORS[i % STAGE_COLORS.length] + ")";
     return '<span><i class="swatch" style="background:' + color + '"></i>' +
-      s.backend + " &middot; " + s.count + " steps &middot; net " +
-      s.net.toFixed(4) + " " + s.unit + "</span>";
+      s.backend + " &middot; steps " + s.start + "&ndash;" + s.end +
+      " &middot; net " + s.net.toFixed(4) + " " + s.unit + "</span>";
   }).join("");
-  el("plotHint").textContent =
-    "Each curve is the change from that method's own first step, because a strain " +
-    "energy and a total electronic energy are not on the same scale.";
+
+  const kinds = Array.from(new Set(series.map((s) => s.kind)));
+  el("plotHint").innerHTML =
+    "Each curve starts from its own zero (hollow marker). They are not joined end " +
+    "to end on purpose: " +
+    (kinds.length > 1
+      ? "one is a strain energy and one a total electronic energy, so the drops do not add up."
+      : "the two methods measure energy differently, so the drops do not add up.") +
+    " Absolute finals: " +
+    series.map((s) => s.backend + " " + s.absLast.toFixed(3)).join(", ") + " kcal/mol.";
   card.style.display = "block";
 }
 
 function fmtShort(v) {
   const a = Math.abs(v);
   if (a === 0) return "0";
-  if (a >= 1000) return v.toExponential(1);
-  if (a >= 1) return v.toFixed(1);
+  if (a >= 10000) return v.toExponential(1);
+  if (a >= 100) return v.toFixed(0);
+  if (a >= 1) return v.toFixed(2);
   return v.toFixed(3);
 }
 
@@ -920,7 +1018,16 @@ el("protonation").addEventListener("change", (e) => {
 el("directory").addEventListener("input", schedulePathCheck);
 el("filename").addEventListener("input", schedulePathCheck);
 ["fmt_cif", "fmt_sdf", "fmt_pdb"].forEach((id) =>
-  el(id).addEventListener("change", checkPath));
+  el(id).addEventListener("change", () => { checkPath(); updateFormatNote(); }));
+
+function updateFormatNote() {
+  const n = chosenFormats().length;
+  el("formatNote").textContent = n
+    ? ""
+    : "Nothing selected — this is a dry run: build and check, write nothing.";
+  buildBtn.textContent = n ? "Build 3D structure" : "Build (dry run)";
+}
+updateFormatNote();
 buildBtn.addEventListener("click", () => build(false));
 el("clearBtn").addEventListener("click", clearCanvas);
 

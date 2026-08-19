@@ -276,6 +276,10 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             molecule = from_molblock(molblock)
             payload["smiles"] = molecule.smiles
             payload["formula"] = molecule.formula
+            payload["mw"] = round(molecule.molecular_weight, 2)
+            payload["charge"] = molecule.formal_charge
+            payload["zwitterion"] = molecule.is_zwitterion
+            payload["n_fragments"] = molecule.n_fragments
             payload["advice"] = classify_undefined_stereo(molecule)
             payload["double_bonds"] = [
                 {"begin": r.begin, "end": r.end, "cip": r.cip, "cis_trans": r.cis_trans}

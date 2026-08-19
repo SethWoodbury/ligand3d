@@ -361,3 +361,83 @@ class TestParamsGeneration:
 
         result = params.generate(reloaded, code="Z06", out_dir=tmp_path)
         assert result.n_conformers == reloaded.GetNumConformers()
+
+
+class TestConformerSearch:
+    """`--confs 1` used to mean one guess, locally minimized.
+
+    That made the answer depend on the random seed by many kcal/mol for anything
+    flexible, so a single requested structure now still comes from a real
+    search: `sample` conformers are generated and minimized cheaply, and only
+    `n_confs` are kept.
+    """
+
+    def test_sampling_scales_with_flexibility(self):
+        rigid = Settings().effective_sample(from_smiles("O=C1CN2CCC1CC2"))
+        medium = Settings().effective_sample(from_smiles("NCC1(CC(=O)O)CCCCC1"))
+        floppy = Settings().effective_sample(from_smiles("CCCCCCCCCCCCO"))
+        assert rigid < medium < floppy
+        assert rigid >= 20
+
+    def test_an_explicit_sample_wins(self):
+        assert Settings(sample=7).effective_sample(from_smiles("CCCCCCCCO")) == 7
+
+    def test_sample_never_falls_below_what_was_asked_for(self):
+        assert Settings(sample=2, n_confs=10).effective_sample(from_smiles("CCO")) == 10
+
+    def test_crest_does_its_own_sampling(self):
+        settings = Settings(conf_method="crest", n_confs=5)
+        assert settings.effective_sample(from_smiles("CCCCCCCCO")) == 5
+
+    def test_a_single_output_is_seed_stable_now(self):
+        """The point of searching: the answer stops depending on the seed."""
+        energies = [
+            build(from_smiles("NCC1(CC(=O)O)CCCCC1"), Settings(seed=seed)).records[0].energy
+            for seed in (1, 2, 3)
+        ]
+        assert max(energies) - min(energies) < 1.0
+
+    def test_sample_one_skips_the_search(self):
+        outcome = build(from_smiles("NCC1(CC(=O)O)CCCCC1"), Settings(sample=1))
+        assert len(outcome.records) == 1
+
+    def test_only_survivors_reach_the_expensive_backend(self):
+        """The cheap method searches; the costly one refines what is left."""
+        if not get_backend("gfn2").available():
+            pytest.skip("tblite not installed")
+        outcome = build(
+            from_smiles("NCC1(CC(=O)O)CCCCC1"),
+            Settings(backend="mmff94,gfn2", n_confs=2, max_steps=200),
+        )
+        assert any("narrowed" in note for note in outcome.notes)
+        stages = {step.stage: step.backend for step in outcome.trace}
+        # Both stages must appear: the traced conformer has to follow the
+        # survivors, or the refinement stage records nothing at all.
+        assert stages.get(0) == "mmff94"
+        assert stages.get(1) == "gfn2"
+
+
+class TestDryRun:
+    def test_no_formats_writes_nothing(self, tmp_path):
+        outcomes = run(
+            from_smiles("CCO"), Settings(formats=()), output=tmp_path / "x.cif"
+        )
+        assert outcomes[0].written() == []
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_molecule_is_still_built_and_checked(self, tmp_path):
+        outcome = run(
+            from_smiles("CCO"), Settings(formats=()), output=tmp_path / "x.cif"
+        )[0]
+        assert outcome.mol_3d.GetNumConformers() >= 1
+        assert outcome.best_energy is not None
+
+
+class TestTraceDefault:
+    def test_tracing_is_on_by_default(self):
+        assert Settings().trace is True
+        outcome = build(from_smiles("CCO"), Settings())
+        assert outcome.trace, "the default build should record a trace"
+
+    def test_it_can_be_turned_off(self):
+        assert build(from_smiles("CCO"), Settings(trace=False)).trace == []

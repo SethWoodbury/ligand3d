@@ -302,6 +302,7 @@ def to_cif_string(
     # Without a name, gemmi labels the entry "string" after its input.
     structure.name = name
     structure.setup_entities()
+    _number_entities(structure)
 
     document = structure.make_mmcif_document()
     block = document.sole_block()
@@ -310,6 +311,17 @@ def to_cif_string(
     _add_provenance(block, smiles=smiles, records=records)
 
     return document.as_string()
+
+
+def _number_entities(structure) -> None:
+    """Give entities integer ids, which is what `label_entity_id` expects.
+
+    `setup_entities` names an entity after the subchain it derived it from, so a
+    ligand called GAB comes out with `label_entity_id GAB!` — an mmCIF validator
+    rejects that, and some parsers choke on the bang.
+    """
+    for number, entity in enumerate(structure.entities, start=1):
+        entity.name = str(number)
 
 
 def _add_bond_loop(block, mol: Chem.Mol, resname: str) -> None:

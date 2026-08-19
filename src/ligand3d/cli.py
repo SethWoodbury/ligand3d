@@ -46,6 +46,12 @@ def build(
         help="Minimization backend, or a comma-separated chain such as 'mmff94,gfn2'.",
     ),
     confs: int = typer.Option(1, "--confs", "-n", min=1, help="Number of conformers to keep."),
+    sample: Optional[int] = typer.Option(
+        None,
+        "--sample",
+        help="How many conformers to generate and search before keeping --confs. "
+        "Defaults to 20-300 by rotatable-bond count. Use 1 to skip the search.",
+    ),
     conf_method: str = typer.Option(
         "rdkit", "--conf-method", help="Conformer search method: rdkit or crest."
     ),
@@ -115,11 +121,15 @@ def build(
         "it carries the bond orders PDB cannot.",
     ),
     no_sdf: bool = typer.Option(False, "--no-sdf", help="Do not write the .sdf sidecar."),
-    trace: bool = typer.Option(
+    dry_run: bool = typer.Option(
         False,
-        "--trace",
-        help="Log the energy at every optimizer step, with the change from the "
-        "previous step. Slower, so off by default.",
+        "--dry-run",
+        help="Build, check and report, but write no files.",
+    ),
+    no_trace: bool = typer.Option(
+        False,
+        "--no-trace",
+        help="Skip the per-step energy log. Tracing is on by default.",
     ),
     trajectory: bool = typer.Option(
         False,
@@ -154,11 +164,12 @@ def build(
     if enumerate_states and ph is None:
         _fail(ValueError("--enumerate-states needs a pH; add --ph <value> or --protonate"))
 
-    chosen = _parse_formats(formats, want_sdf=not no_sdf)
+    chosen = () if dry_run else _parse_formats(formats, want_sdf=not no_sdf)
 
     settings = Settings(
         backend=backend,
         n_confs=confs,
+        sample=sample,
         conf_method=conf_method,
         prune_rms=prune_rms,
         energy_window=energy_window,
@@ -175,7 +186,7 @@ def build(
         n_threads=threads,
         resname=resname,
         formats=chosen,
-        trace=trace,
+        trace=not no_trace,
         trajectory=trajectory,
         params=make_params,
         params_code=params_code,
@@ -184,7 +195,7 @@ def build(
 
     try:
         mol = read_input(molecule)
-        target = output or Path(f"{mol.name.lower()}.{chosen[0]}")
+        target = output or Path(f"{mol.name.lower()}.{chosen[0] if chosen else 'cif'}")
         # An explicit extension is a format request, so honour it.
         suffix = target.suffix.lower().lstrip(".")
         if suffix in ("cif", "pdb", "sdf") and suffix not in settings.formats:
@@ -229,10 +240,9 @@ def build(
                     + (" ..." if len(spread) > 8 else "")
                     + f" {unit}"
                 )
-        if trace and outcome.trace:
+        if outcome.trace:
             _print_trace(outcome.trace)
-        for path in outcome.written():
-            console.print(f"  [green]wrote[/green] {path}")
+        _print_written(outcome.written())
 
 
 def _print_stereo(mol) -> None:
@@ -283,6 +293,22 @@ def _parse_formats(spec: str, want_sdf: bool = True) -> tuple[str, ...]:
         _fail(ValueError("no output formats left to write"))
     # Preserve order but drop repeats; the first entry is the primary output.
     return tuple(dict.fromkeys(chosen))
+
+
+def _print_written(paths) -> None:
+    """List output paths, one bare path per line.
+
+    The path goes on its own line with nothing before it so a double-click
+    selects the whole thing and it pastes straight into a shell. Prefixing each
+    with "wrote" means every copy needs the mouse.
+    """
+    paths = list(paths)
+    if not paths:
+        console.print("  [dim]nothing written (no output formats selected)[/dim]")
+        return
+    console.print(f"  [green]wrote {len(paths)} file(s):[/green]")
+    for path in paths:
+        console.print(str(path), highlight=False, soft_wrap=True)
 
 
 def _print_trace(trace: list, limit: int = 12) -> None:
@@ -572,7 +598,7 @@ def embed(
     )
     try:
         mol = read_input(molecule)
-        target = output or Path(f"{mol.name.lower()}.{chosen[0]}")
+        target = output or Path(f"{mol.name.lower()}.{chosen[0] if chosen else 'cif'}")
         outcomes = run(mol, settings, output=target)
     except Ligand3DError as exc:
         _fail(exc)
@@ -581,8 +607,7 @@ def embed(
     _print_stereo(mol)
     for outcome in outcomes:
         console.print(f"  embedded {outcome.mol_3d.GetNumConformers()} conformer(s)")
-        for path in outcome.written():
-            console.print(f"  [green]wrote[/green] {path}")
+        _print_written(outcome.written())
 
 
 @app.command()
@@ -593,7 +618,7 @@ def minimize(
     formats: str = typer.Option("cif,sdf", "--format", "-f", help="cif, pdb, sdf."),
     solvent: Optional[str] = typer.Option(None, "--solvent", help="Implicit solvent."),
     max_steps: int = typer.Option(500, "--max-steps", help="Optimizer step limit."),
-    trace: bool = typer.Option(False, "--trace", help="Log energy at every step."),
+    no_trace: bool = typer.Option(False, "--no-trace", help="Skip the per-step energy log."),
     trajectory: bool = typer.Option(False, "--trajectory", help="Save the step geometries."),
     threads: int = typer.Option(1, "--threads", "-j", min=1, help="Threads."),
     resname: Optional[str] = typer.Option(None, "--resname", help="PDB residue name."),
@@ -634,7 +659,8 @@ def minimize(
                 job = MinimizeJob(
                     mol=mol, conf_id=cid, charge=charge, max_steps=max_steps,
                     solvent=solvent, n_threads=threads,
-                    trace=trace and index == 0, trajectory=trajectory and index == 0,
+                    trace=(not no_trace) and index == 0,
+                    trajectory=trajectory and index == 0,
                     stage=stage,
                 )
                 result = chosen_backend.minimize(job)
@@ -653,7 +679,7 @@ def minimize(
         _fail(exc)
         return
 
-    if trace and all_trace:
+    if all_trace:
         _print_trace(all_trace)
     if records:
         best = min(r.energy for r in records)
@@ -674,20 +700,22 @@ def _write_plain(base, mol, records, formats, resname, frames, trace) -> None:
     from .write import write_cif, write_pdb, write_sdf, write_trajectory
 
     writers = {"cif": write_cif, "pdb": write_pdb, "sdf": write_sdf}
+    written = []
     for fmt in formats:
         writer = writers[fmt]
         if fmt == "sdf":
-            path = writer(base.with_suffix(".sdf"), mol, records=records, name=resname)
+            written.append(writer(base.with_suffix(".sdf"), mol, records=records, name=resname))
         else:
-            path = writer(base.with_suffix(f".{fmt}"), mol, records=records, resname=resname)
-        console.print(f"  [green]wrote[/green] {path}")
+            written.append(
+                writer(base.with_suffix(f".{fmt}"), mol, records=records, resname=resname)
+            )
     if frames:
-        path = write_trajectory(
+        written.append(write_trajectory(
             base.with_name(f"{base.stem}_traj.pdb"), mol, frames, resname=resname,
             energies=[s.energy for s in trace] or None,
             stage_labels=[f"stage {s.stage}: {s.backend}" for s in trace] or None,
-        )
-        console.print(f"  [green]wrote[/green] {path} ({len(frames)} frames)")
+        ))
+    _print_written(written)
 
 
 @app.command()
@@ -726,8 +754,7 @@ def conformers(
             best = min(energies)
             spread = ", ".join(f"{e - best:+.2f}" for e in energies[:10])
             console.print(f"  {len(energies)} conformer(s); relative energies: {spread}")
-        for path in outcome.written():
-            console.print(f"  [green]wrote[/green] {path}")
+        _print_written(outcome.written())
 
 
 @app.command()
@@ -793,9 +820,9 @@ def params(
         f"[bold]{structure}[/bold]: {mol.GetNumAtoms()} atoms, "
         f"{mol.GetNumConformers()} conformer(s)"
     )
-    for line in params_mod.summarize(result):
-        prefix = "[green]wrote[/green]" if line.startswith("wrote ") else "·"
-        console.print(f"  {prefix} {line.removeprefix('wrote ')}")
+    for line in result.notes:
+        console.print(f"  · {line}")
+    _print_written(result.paths())
 
 
 @app.command()

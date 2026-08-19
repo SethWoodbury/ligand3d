@@ -44,6 +44,16 @@ class Settings:
 
     backend: str = "mmff94"
     n_confs: int = 1
+    """How many conformers to write out."""
+    sample: int | None = None
+    """How many to generate and search before keeping `n_confs`.
+
+    None means pick from the molecule's flexibility. This is separate from
+    `n_confs` on purpose: a single output structure should still be the best of
+    a real search, not one arbitrary local minimum. Embedding and force-field
+    minimizing a few dozen conformers costs well under a second, and the answer
+    for a flexible molecule moves by many kcal/mol.
+    """
     conf_method: str = "rdkit"
     prune_rms: float = 0.5
     energy_window: float | None = None
@@ -68,6 +78,11 @@ class Settings:
     resname: str | None = None
 
     formats: tuple[str, ...] = ("cif", "sdf")
+    """Which representations to write. Empty means write nothing.
+
+    An empty tuple is a dry run: everything is built, checked and reported, and
+    no file is created. Useful for testing a molecule before committing a name.
+    """
     """Which representations to write.
 
     mmCIF is the default because it carries everything PDB does plus the bond
@@ -76,13 +91,42 @@ class Settings:
     PDB is written on request; nothing in the params path needs it, since
     molfile_to_params reads the SDF directly.
     """
-    trace: bool = False
-    """Record energy at every optimizer step. Costs time; off by default."""
+    trace: bool = True
+    """Record energy at every optimizer step, with the change from the previous.
+
+    On by default: it is what makes a minimization inspectable rather than a
+    black box. The cost is real but small, and the geometry is unaffected.
+    """
     trajectory: bool = False
     """Keep every step's coordinates and write them as a multi-model PDB."""
 
     params: bool = False
     """Also generate a Rosetta params file."""
+
+    def effective_sample(self, molecule) -> int:
+        """How many conformers to generate for the search.
+
+        Scaled by rotatable-bond count, the usual proxy for how many distinct
+        shapes a molecule has. A rigid cage needs a handful; a peptide-like
+        chain needs hundreds. CREST does its own sampling, so it is left alone.
+        """
+        if self.conf_method != "rdkit":
+            return self.n_confs
+        if self.sample is not None:
+            return max(self.sample, self.n_confs)
+
+        from rdkit.Chem import rdMolDescriptors
+
+        rotatable = rdMolDescriptors.CalcNumRotatableBonds(molecule.mol)
+        if rotatable <= 2:
+            budget = 20
+        elif rotatable <= 5:
+            budget = 60
+        elif rotatable <= 9:
+            budget = 150
+        else:
+            budget = 300
+        return max(budget, self.n_confs)
     params_code: str | None = None
     allow_code_conflict: bool = False
 
@@ -216,8 +260,9 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
     if solvent and solvation_capable:
         notes.append(f"implicit solvation: ALPB {solvent}")
 
+    sample = settings.effective_sample(molecule)
     conf_opts = conf_mod.ConformerOptions(
-        n_confs=settings.n_confs,
+        n_confs=sample,
         method=settings.conf_method,
         prune_rms=settings.prune_rms,
         energy_window=settings.energy_window,
@@ -226,48 +271,94 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
         n_threads=settings.n_threads,
     )
     mol_3d = conf_mod.generate(molecule, conf_opts)
-    notes.append(f"embedded {mol_3d.GetNumConformers()} conformer(s) via {settings.conf_method}")
-
-    energies: dict[int, float] = {}
-    results: dict[int, MinimizeResult] = {}
-    failures: list[str] = []
+    generated = mol_3d.GetNumConformers()
+    if sample > settings.n_confs:
+        notes.append(
+            f"searched {generated} conformer(s) via {settings.conf_method}, "
+            f"keeping the best {settings.n_confs}"
+        )
+    else:
+        notes.append(f"embedded {generated} conformer(s) via {settings.conf_method}")
 
     # Tracing every conformer would produce an unreadable pile of curves, so
     # only the first is traced; it is the one the graph shows.
-    trace_conformer = mol_3d.GetConformers()[0].GetId() if mol_3d.GetNumConformers() else -1
-    traces: dict[int, list] = {}
+    traced_id = mol_3d.GetConformers()[0].GetId() if generated else -1
+    traces: dict[int, list] = []
+    traces = {}
     frames: dict[int, list] = {}
     timings: list[tuple[str, float]] = []
+    failures: list[str] = []
 
-    for conformer in list(mol_3d.GetConformers()):
-        cid = conformer.GetId()
-        last: MinimizeResult | None = None
-        observe = cid == trace_conformer
-        try:
-            for stage, backend in enumerate(backends):
-                job = MinimizeJob(
-                    mol=mol_3d,
-                    conf_id=cid,
-                    charge=molecule.formal_charge,
-                    max_steps=settings.max_steps,
-                    fmax=settings.fmax,
-                    solvent=solvent if backend.caps.supports_solvation else None,
-                    n_threads=settings.n_threads,
-                    trace=settings.trace and observe,
-                    trajectory=settings.trajectory and observe,
-                    stage=stage,
+    def run_stage(stage: int, backend, conf_ids: list[int]):
+        """Minimize a set of conformers with one backend."""
+        energies: dict[int, float] = {}
+        results: dict[int, MinimizeResult] = {}
+        for cid in conf_ids:
+            observe = cid == traced_id
+            try:
+                result = backend.minimize(
+                    MinimizeJob(
+                        mol=mol_3d,
+                        conf_id=cid,
+                        charge=molecule.formal_charge,
+                        max_steps=settings.max_steps,
+                        fmax=settings.fmax,
+                        solvent=solvent if backend.caps.supports_solvation else None,
+                        n_threads=settings.n_threads,
+                        trace=settings.trace and observe,
+                        trajectory=settings.trajectory and observe,
+                        stage=stage,
+                    )
                 )
-                last = backend.minimize(job)
-                timings.append((backend.caps.name, last.wall_seconds))
-                if observe:
-                    traces.setdefault(cid, []).extend(last.trace)
-                    frames.setdefault(cid, []).extend(last.frames)
-        except Ligand3DError as exc:
-            failures.append(f"conformer {cid}: {exc}")
-            continue
-        if last is not None:
-            energies[cid] = last.energy
-            results[cid] = last
+            except Ligand3DError as exc:
+                failures.append(f"conformer {cid} on {backend.caps.name}: {exc}")
+                continue
+            timings.append((backend.caps.name, result.wall_seconds))
+            if observe:
+                traces.setdefault(cid, []).extend(result.trace)
+                frames.setdefault(cid, []).extend(result.frames)
+            energies[cid] = result.energy
+            results[cid] = result
+        return energies, results
+
+    # --- search with the cheapest method, refine only the survivors ---------
+    #
+    # Running every backend on every sampled conformer is the obvious
+    # implementation and the wrong one: searching broadly is only affordable
+    # because the first method is cheap. A hundred GFN2 minimizations to find
+    # the same handful of shapes MMFF94 would have found is minutes wasted.
+    all_ids = [c.GetId() for c in mol_3d.GetConformers()]
+    energies, results = run_stage(0, backends[0], all_ids)
+    if not results:
+        raise MinimizationError(
+            "every conformer failed to minimize:\n  " + "\n  ".join(failures[:5])
+        )
+
+    if len(backends) > 1:
+        survivors = conf_mod.prune(
+            mol_3d,
+            energies,
+            rms_threshold=settings.prune_rms,
+            energy_window=settings.energy_window,
+            max_keep=settings.max_keep or settings.n_confs,
+        )
+        notes.append(
+            f"{backends[0].caps.name} narrowed {len(results)} to {len(survivors)}; "
+            f"refining with {', '.join(b.caps.name for b in backends[1:])}"
+        )
+        # Follow the survivors. The conformer traced through the search is
+        # usually pruned away, and tracing an id that is no longer being
+        # minimized silently produces an empty curve for every later stage.
+        if survivors and traced_id not in survivors:
+            traced_id = survivors[0]
+        for stage, backend in enumerate(backends[1:], start=1):
+            energies, results = run_stage(stage, backend, survivors)
+            if not results:
+                raise MinimizationError(
+                    f"every conformer failed on {backend.caps.name}:\n  "
+                    + "\n  ".join(failures[:5])
+                )
+            survivors = list(results)
 
     if not results:
         raise MinimizationError(
@@ -326,8 +417,8 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
         mol_3d=final,
         records=records,
         notes=notes,
-        trace=traces.get(trace_conformer, []),
-        frames=frames.get(trace_conformer, []),
+        trace=[step for steps in traces.values() for step in steps],
+        frames=frames.get(traced_id, []) or next(iter(frames.values()), []),
         wall_seconds=elapsed,
     )
 

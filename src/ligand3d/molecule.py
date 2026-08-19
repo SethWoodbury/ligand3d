@@ -164,6 +164,13 @@ class Molecule:
         return rdMolDescriptors.CalcMolFormula(self.mol)
 
     @property
+    def molecular_weight(self) -> float:
+        """Average molecular weight, hydrogens included whether explicit or not."""
+        from rdkit.Chem import Descriptors
+
+        return float(Descriptors.MolWt(self.mol))
+
+    @property
     def is_zwitterion(self) -> bool:
         """Net-neutral but carrying both a positive and a negative site.
 

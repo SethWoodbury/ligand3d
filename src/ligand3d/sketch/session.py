@@ -63,14 +63,19 @@ class TargetInfo:
 VALID_FORMATS = ("cif", "pdb", "sdf")
 
 
-def normalize_formats(formats) -> tuple[str, ...]:
-    """Coerce whatever the page sent into a valid, ordered format tuple."""
+def normalize_formats(formats, default=("cif", "sdf")) -> tuple[str, ...]:
+    """Coerce whatever the page sent into a valid, ordered format tuple.
+
+    `formats=[]` is meaningful — it is the dry-run request — so an explicitly
+    empty list is honoured, while a missing key falls back to the default.
+    """
+    if formats is None:
+        return tuple(default)
     if isinstance(formats, str):
         formats = [f.strip() for f in formats.split(",")]
-    formats = [str(f).strip().lower() for f in (formats or []) if str(f).strip()]
-    formats = ["cif" if f == "mmcif" else f for f in formats]
-    kept = [f for f in dict.fromkeys(formats) if f in VALID_FORMATS]
-    return tuple(kept) or ("cif", "sdf")
+    cleaned = [str(f).strip().lower() for f in formats if str(f).strip()]
+    cleaned = ["cif" if f == "mmcif" else f for f in cleaned]
+    return tuple(f for f in dict.fromkeys(cleaned) if f in VALID_FORMATS)
 
 
 def _normalize_stem(filename: str) -> str:
@@ -309,7 +314,10 @@ def run_job(
             f"{settings.n_confs} conformers via {settings.conf_method}"
             if settings.n_confs > 1 else "single conformer"
         )
-        parts.append("formats " + "/".join(settings.formats))
+        parts.append(
+            "formats " + "/".join(settings.formats) if settings.formats
+            else "dry run, writing nothing"
+        )
         if settings.trace:
             parts.append("tracing every step")
         if settings.trajectory:
@@ -322,7 +330,11 @@ def run_job(
         if target.will_create_directory:
             job.say(f"created directory {target.directory}")
 
-        base = Path(target.directory) / f"{target.stem}.{settings.formats[0]}"
+        if settings.formats:
+            base = Path(target.directory) / f"{target.stem}.{settings.formats[0]}"
+        else:
+            job.say("dry run: building and checking, writing no files", "warn")
+            base = Path(target.directory) / target.stem
         outcomes = run(molecule, settings, output=base)
 
         outputs: list[str] = []
@@ -342,9 +354,14 @@ def run_job(
                 for line in summarize_trace(outcome.trace):
                     job.say(line)
                 trace.extend(step.to_json() for step in outcome.trace)
-            for path in outcome.written():
-                job.say(f"wrote {path}", "ok")
-                outputs.append(str(path))
+            written = outcome.written()
+            if written:
+                job.say(f"wrote {len(written)} file(s):", "ok")
+                for path in written:
+                    job.say(str(path), "ok")
+                    outputs.append(str(path))
+            else:
+                job.say("no files written (dry run)", "warn")
 
         from .. import molecule as mol_mod
 
@@ -419,13 +436,9 @@ def _settings_from_json(data: dict[str, Any]):
 
     solvent = (data.get("solvent") or "").strip() or None
 
-    formats = data.get("formats")
-    if isinstance(formats, str):
-        formats = [f.strip() for f in formats.split(",") if f.strip()]
-    if not formats:
-        formats = ["cif", "sdf"]
-    formats = ["cif" if f == "mmcif" else f for f in formats]
-    formats = [f for f in dict.fromkeys(formats) if f in ("cif", "pdb", "sdf")] or ["cif"]
+    # An explicitly empty list is the dry-run request and must survive; only a
+    # missing key falls back to the default.
+    formats = normalize_formats(data.get("formats"))
 
     return Settings(
         backend=str(data.get("backend") or "mmff94"),
@@ -446,7 +459,7 @@ def _settings_from_json(data: dict[str, Any]):
         n_threads=int(num("threads", 1, int)),
         resname=(data.get("resname") or None),
         formats=tuple(formats),
-        trace=bool(data.get("trace")),
+        trace=bool(data.get("trace", True)),
         trajectory=bool(data.get("trajectory")),
         params=bool(data.get("params")),
         params_code=(data.get("params_code") or None),

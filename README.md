@@ -215,16 +215,49 @@ in a way that looks right:
 After minimization it also verifies that stereochemistry, protonation state, and
 heavy-atom connectivity all survived — on every conformer, not just the first.
 
-## Conformers
+## Conformers — and what the default actually does
+
+**Every build searches.** Asking for one output structure does not mean one guess: a
+batch of conformers is generated with ETKDG, minimized with the cheap force field, and
+only the best `--confs` are kept. The count scales with rotatable bonds (20 for a rigid
+cage, up to 300 for something floppy) and is overridable with `--sample`.
+
+This matters more than it sounds. Minimizing a single ETKDG guess is a *local*
+minimization, and for gabapentin the answer moved by **9.6 kcal/mol** depending only on
+the random seed:
+
+| | best energy found |
+|---|---|
+| one guess, 5 different seeds | −7.46, −17.03, −9.49, −8.74, −15.15 |
+| searching (the default now) | −17.03, −17.03, −17.06, −17.25, −17.32 |
+
+The cost is about half a second.
 
 ```bash
-ligand3d build "<smiles>" --confs 50                 # ETKDG multi-embed, prune, cluster
-ligand3d build "<smiles>" --confs 50 --conf-method crest   # CREST metadynamics
+ligand3d build "<smiles>"                    # searches ~60, keeps the best 1
+ligand3d build "<smiles>" --confs 20         # searches, keeps 20
+ligand3d build "<smiles>" --sample 500 -n 50 # search harder
+ligand3d build "<smiles>" --sample 1         # skip the search: one guess, minimized
+ligand3d conformers "<smiles>" -n 50 --method crest
 ```
 
-The RDKit method takes seconds. CREST takes minutes and finds far more — 145 unique
-conformers for gabapentin in about five wall-clock minutes on eight threads — and needs
-a `crest` binary, which `ligand3d doctor` will locate or tell you how to provide.
+ETKDG is a genuine stochastic global sampler — independent distance-geometry starts with
+torsion preferences from CSD statistics — not a walk from one structure. Survivors are
+de-duplicated by symmetry-corrected heavy-atom RMSD and ranked by energy. CREST does far
+more (metadynamics at the GFN level, minutes instead of seconds) and is what to reach for
+when the answer really matters.
+
+**Chained backends search cheaply and refine narrowly.** `--backend mmff94,gfn2` runs
+MMFF94 over the whole sample, prunes to the survivors, and only then runs GFN2 on those:
+
+```
+searched 57 conformer(s) via rdkit, keeping the best 2
+mmff94 narrowed 57 to 2; refining with gfn2
+minimization time: mmff94 0.29s, gfn2 0.45s
+```
+
+Running both methods over all 57 would have cost about thirty seconds of GFN2 to rediscover
+shapes MMFF94 already found.
 
 ## Drawing
 
@@ -346,6 +379,13 @@ ligand3d build "<smiles>" -o thing.pdb               # an explicit suffix select
 
 Nothing in the params path needs a PDB — `molfile_to_params` reads the SDF directly.
 
+`--dry-run` (or unticking every format in the browser) builds, minimizes, checks and
+reports without writing anything, which is the quick way to try a molecule before
+committing to a filename.
+
+Charges survive everywhere: the mmCIF carries `pdbx_formal_charge` per atom, so a
+zwitterion reads back as `[NH3+]CC1(CC(=O)[O-])CCCCC1` with both sites intact.
+
 PDB output has unique atom names, CONECT records, formal charges, and provenance REMARKs.
 Every file written is read back and checked before the command returns.
 
@@ -377,13 +417,16 @@ typing. On top of it:
 
 ## Watching the minimization
 
-Both are off by default because they cost time.
+Tracing is **on by default** — it is what makes a minimization inspectable rather than a
+black box, and it does not change the geometry. Turn it off with `--no-trace`.
 
 ```bash
-ligand3d build "<smiles>" --backend mmff94,gfn2 --trace --trajectory
+ligand3d build "<smiles>" --backend mmff94,gfn2 --trajectory
+ligand3d build "<smiles>" --no-trace          # quieter
+ligand3d build "<smiles>" --dry-run           # build and check, write nothing
 ```
 
-`--trace` logs the energy at every optimizer step with the change from the previous step,
+The trace logs the energy at every optimizer step with the change from the previous step,
 kept **separate per method** — a chained `mmff94,gfn2` run reports two blocks with their
 own step counts and net changes, and no delta ever bridges the boundary, because a strain
 energy and a total electronic energy are not comparable. The total wall time and a
@@ -391,6 +434,14 @@ per-method breakdown are always printed.
 
 `--trajectory` writes `<name>_traj.pdb`, one MODEL per step with the energy and the
 responsible method in REMARKs, so it animates in PyMOL or ChimeraX.
+
+In the browser this becomes a graph. The x axis is the **cumulative** step count, because
+the stages genuinely run one after another — a method that takes 20 steps after 502 of the
+first is drawn at 502–522, not back at zero. The y axis is ΔE from **each stage's own
+first step**, and the curves are deliberately *not* joined end to end: absolute energies
+from two methods share no scale, so connecting them would read as one continuous descent
+and imply the two drops add up. They do not. The absolute final energy of each stage is
+printed under the plot instead.
 
 One caveat worth knowing: RDKit's force fields have no per-step callback, so tracing them
 means asking for one iteration at a time, which restarts the optimizer's state and

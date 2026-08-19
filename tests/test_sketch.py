@@ -107,9 +107,16 @@ class TestFormatNormalization:
     def test_order_is_preserved_and_repeats_removed(self):
         assert normalize_formats(["pdb", "cif", "pdb"]) == ("pdb", "cif")
 
-    def test_empty_falls_back_to_the_default(self):
-        assert normalize_formats([]) == ("cif", "sdf")
+    def test_a_missing_key_falls_back_to_the_default(self):
         assert normalize_formats(None) == ("cif", "sdf")
+
+    def test_an_explicitly_empty_list_is_a_dry_run(self):
+        """Unticking every format is a request, not an omission."""
+        assert normalize_formats([]) == ()
+        assert normalize_formats("") == ()
+
+    def test_only_unknown_formats_is_also_empty(self):
+        assert normalize_formats(["xyz", "mol2"]) == ()
 
 
 class TestFilenameSequence:
