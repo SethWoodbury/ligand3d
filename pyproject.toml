@@ -37,7 +37,14 @@ xtb = ["tblite>=0.4", "ase>=3.22"]
 # e3nn==0.4.4 and fairchem-core requires e3nn>=0.5. Install them in separate
 # virtualenvs; `ligand3d doctor` detects the clash and says so.
 mace = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]
-fairchem = ["ase>=3.22", "torch>=2.0", "fairchem-core>=2.20"]
+# fairchem-core supports only 3.11-3.13, while ligand3d itself runs on 3.10+.
+# Without the marker, resolving this extra fails on 3.10 rather than simply
+# leaving the backend unavailable there.
+fairchem = [
+    "ase>=3.22",
+    "torch>=2.0",
+    "fairchem-core>=2.20; python_version >= '3.11' and python_version < '3.14'",
+]
 aimnet = ["ase>=3.22", "torch>=2.0"]
 mlff = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]  # alias for [mace]
 protonation = ["dimorphite-dl>=2.0"]
@@ -57,6 +64,18 @@ ligand3d = "ligand3d.cli:app"
 [project.urls]
 Homepage = "https://github.com/SethWoodbury/ligand3d"
 Issues = "https://github.com/SethWoodbury/ligand3d/issues"
+
+[tool.uv]
+# mace-torch pins e3nn==0.4.4 and fairchem-core needs e3nn>=0.5, so these extras
+# genuinely cannot be resolved together. Declaring it here is what stops `uv
+# run` and `uv lock` from trying: without it they attempt to satisfy every extra
+# at once and fail with an unsatisfiable-requirements error that looks like a
+# broken project rather than a deliberate split.
+conflicts = [
+    [{ extra = "mace" }, { extra = "fairchem" }],
+    [{ extra = "mlff" }, { extra = "fairchem" }],
+    [{ extra = "all" }, { extra = "fairchem" }],
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ligand3d"]
