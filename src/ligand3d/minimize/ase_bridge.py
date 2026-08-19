@@ -60,6 +60,15 @@ class ASEBackend:
     def make_calculator(self, job: MinimizeJob):  # pragma: no cover - abstract
         raise NotImplementedError
 
+    def prepare_atoms(self, atoms: "Atoms", job: MinimizeJob) -> None:
+        """Annotate the Atoms before the calculator sees it.
+
+        The OMol25-trained potentials read total charge and spin off
+        `atoms.info` rather than taking them as constructor arguments, so this
+        is where a charge-aware backend passes them along. Default is a no-op.
+        """
+        return None
+
     def extra_availability(self) -> Availability | None:
         """Hook for checks beyond module imports, e.g. a missing weights file."""
         return None
@@ -91,6 +100,7 @@ class ASEBackend:
         from ase.optimize import LBFGS
 
         atoms = mol_to_atoms(job.mol, job.conf_id)
+        self.prepare_atoms(atoms, job)
         atoms.calc = self.make_calculator(job)
 
         try:

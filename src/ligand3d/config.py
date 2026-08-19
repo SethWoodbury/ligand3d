@@ -42,29 +42,119 @@ _WEIGHT_PROBE_DIRS = [
     CACHE_DIR / "weights",
 ]
 
-# Filename patterns for each logical model, tried in order within each probe dir.
-_WEIGHT_PATTERNS: dict[str, tuple[str, ...]] = {
-    "mace-off": (
-        "models--ACEsuit--mace-off-23/MACE-OFF23_medium.model",
-        "mace_off/MACE-OFF23_medium.model",
-        "MACE-OFF23_medium.model",
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """One machine-learned potential checkpoint.
+
+    `patterns` are tried in order inside each probe directory, so the
+    HuggingFace-style layout used on the cluster is found first and a flat
+    directory of `.model` files still works.
+    """
+
+    key: str
+    family: str  # "mace" | "fairchem" | "aimnet2"
+    patterns: tuple[str, ...]
+    description: str = ""
+    takes_charge: bool = False
+    head: str | None = None  # multi-head MACE models need one selected
+    organic_only: bool = False
+    approx_mb: int = 0
+
+    def name_padded(self, width: int = 16) -> str:
+        return f"{self.key}:".ljust(width + 1)
+
+
+def _hf(repo: str, filename: str) -> tuple[str, ...]:
+    """Both the HuggingFace cache layout and a plain filename."""
+    return (f"models--{repo}/{filename}", filename)
+
+
+# Every checkpoint ligand3d knows how to load. Presence is discovered at
+# runtime; listing one here does not assume it exists on this machine.
+MODELS: tuple[ModelSpec, ...] = (
+    # --- MACE, organic molecules ------------------------------------------
+    ModelSpec("mace-off", "mace", _hf("ACEsuit--mace-off-23", "MACE-OFF23_medium.model"),
+              "MACE-OFF23 medium. Neutral organic molecules.", organic_only=True, approx_mb=18),
+    ModelSpec("mace-off-small", "mace", _hf("ACEsuit--mace-off-23", "MACE-OFF23_small.model"),
+              "MACE-OFF23 small. Fastest of the OFF23 set.", organic_only=True, approx_mb=7),
+    ModelSpec("mace-off-large", "mace", _hf("ACEsuit--mace-off-23", "MACE-OFF23_large.model"),
+              "MACE-OFF23 large. Most accurate of the OFF23 set.", organic_only=True, approx_mb=55),
+    ModelSpec("mace-off-24", "mace", _hf("ACEsuit--mace-off-24", "MACE-OFF24_medium.model"),
+              "MACE-OFF24 medium. Successor to OFF23.", organic_only=True, approx_mb=18),
+    # --- MACE, charge-aware -----------------------------------------------
+    ModelSpec("mace-omol", "mace",
+              _hf("ACEsuit--mace-omol-0", "MACE-omol-0-extra-large-1024.model"),
+              "MACE trained on OMol25. Consumes total charge.",
+              takes_charge=True, approx_mb=422),
+    # --- MACE, multi-head -------------------------------------------------
+    ModelSpec("mace-mh", "mace", _hf("ACEsuit--mace-mh-0", "mace-mh-0.model"),
+              "MACE multi-head (omol head). Fast and general, ignores charge.",
+              head="omol", approx_mb=40),
+    ModelSpec("mace-mh-1", "mace", _hf("ACEsuit--mace-mh-1", "mace-mh-1.model"),
+              "MACE multi-head v1 (omol head).", head="omol", approx_mb=59),
+    ModelSpec("mace-mh-spice", "mace", _hf("ACEsuit--mace-mh-0", "mace-mh-0.model"),
+              "MACE multi-head, SPICE wB97M head. Organic chemistry.",
+              head="spice_wB97M", approx_mb=40),
+    # --- MACE, materials --------------------------------------------------
+    ModelSpec("mace-mp", "mace",
+              _hf("ACEsuit--mace-mp-0", "MACE-matpes-r2scan-omat-ft.model"),
+              "MACE-MP-0 universal potential. Broad elements, ignores charge.",
+              approx_mb=79),
+    # --- fairchem / OMol25, all charge- and spin-aware ---------------------
+    ModelSpec("esen", "fairchem",
+              _hf("facebook--esen-sm-conserving-all-omol", "esen_sm_conserving_all.pt"),
+              "eSEN small, conserving. OMol25; excellent accuracy per second.",
+              takes_charge=True, approx_mb=51),
+    ModelSpec("esen-sm-direct", "fairchem",
+              _hf("facebook--esen-sm-direct-all-omol", "esen_sm_direct_all.pt"),
+              "eSEN small, direct force prediction. Faster, not energy-conserving.",
+              takes_charge=True, approx_mb=51),
+    ModelSpec("esen-md-direct", "fairchem",
+              _hf("facebook--esen-md-direct-all-omol", "esen_md_direct_all.pt"),
+              "eSEN medium, direct.", takes_charge=True, approx_mb=406),
+    ModelSpec("uma-s", "fairchem",
+              _hf("facebook--fairchem-uma-s-1p1", "uma-s-1p1.pt"),
+              "UMA small 1.1. Universal model; omol task.",
+              takes_charge=True, approx_mb=1170),
+    ModelSpec("uma-s-1p2", "fairchem",
+              _hf("facebook--fairchem-uma-s-1p2", "uma-s-1p2.pt"),
+              "UMA small 1.2.", takes_charge=True, approx_mb=2330),
+    ModelSpec("uma-sm", "fairchem",
+              _hf("facebook--fairchem-uma-sm", "uma_sm.pt"),
+              "UMA sm.", takes_charge=True, approx_mb=1170),
+    ModelSpec("uma-m", "fairchem",
+              _hf("facebook--fairchem-uma-m-1p1", "uma-m-1p1.pt"),
+              "UMA medium 1.1. Largest and slowest; needs real memory.",
+              takes_charge=True, approx_mb=11170),
+    ModelSpec("allscaip", "fairchem",
+              _hf("facebook--allscaip-omol102m-md-cons", "AllScAIP-OMol102M-md-cons.pt"),
+              "AllScAIP OMol102M, conserving.", takes_charge=True, approx_mb=688),
+    ModelSpec("allscaip-direct", "fairchem",
+              _hf("facebook--allscaip-omol102m-md-d", "AllScAIP-OMol102M-md-d.pt"),
+              "AllScAIP OMol102M, direct.", takes_charge=True, approx_mb=695),
+)
+
+MODELS_BY_KEY: dict[str, ModelSpec] = {m.key: m for m in MODELS}
+
+# Models present on the cluster that ligand3d cannot currently load, kept here
+# so `doctor` can explain the gap rather than staying silent about it.
+UNSUPPORTED_MODELS: dict[str, str] = {
+    "mace-polar": (
+        "MACE-POLAR-1 needs the graph_longrange package and a patched mace fork "
+        "(mace.modules.extensions.PolarMACE), neither of which is on PyPI."
     ),
-    "mace-off-small": (
-        "models--ACEsuit--mace-off-23/MACE-OFF23_small.model",
-        "mace_off/MACE-OFF23_small.model",
-        "MACE-OFF23_small.model",
+    "so3lr": (
+        "SO3LR is a JAX model and needs jax, orbax, and the so3lr package; "
+        "ligand3d's backends are all torch or ASE based."
     ),
-    "mace-off-large": (
-        "models--ACEsuit--mace-off-23/MACE-OFF23_large.model",
-        "mace_off/MACE-OFF23_large.model",
-        "MACE-OFF23_large.model",
-    ),
-    "mace-mp": (
-        "models--ACEsuit--mace-mp-0/MACE-matpes-r2scan-omat-ft.model",
-        "mace_mp/MACE-matpes-r2scan-omat-ft.model",
-        "MACE-matpes-r2scan-omat-ft.model",
+    "orb-mol": (
+        "orb-models 0.7 removed orb_models.forcefield.calculator, so there is no "
+        "ASE calculator to attach; pin orb-models<0.7 and open an issue if needed."
     ),
 }
+
+_WEIGHT_PATTERNS: dict[str, tuple[str, ...]] = {m.key: m.patterns for m in MODELS}
 
 _XTB_PROBE = [
     Path("/home/woodbuse/conda/envs/qcb-xtb/bin/xtb"),

@@ -1,21 +1,21 @@
-"""Serve a browser sketcher and wait for a molecule.
+"""Serve the browser sketcher.
 
-The flow is deliberately blunt: start a localhost HTTP server, open a browser at
-it, block until the page POSTs a molblock back, shut down, and hand the molblock
-to the same pipeline the command line uses. No persistent daemon, no state.
+`ligand3d sketch` starts a localhost server and opens a browser. The page hosts
+a 2D editor, the build settings, and a run log. You draw, build, read what
+happened, clear the canvas, and draw the next one — the server stays up until
+you stop it, so nothing needs reloading between molecules.
 
-Three engines, tried in order:
+Two engines, tried in order:
 
 - **JSME** — the default. One 1 MB zip containing a single `jsme.nocache.js`
-  loader that runs entirely in the browser. It is fetched on first use and then
-  works offline forever.
+  loader that runs entirely in the browser. Fetched on first use, offline after.
 - **Ketcher** — nicer to use, but EPAM ships it as an npm library rather than a
-  servable page: `ketcher-standalone.zip` contains `index.js` and `main.js` and
-  no HTML at all, so it cannot simply be unzipped and served. Point
-  `LIGAND3D_KETCHER_DIR` at a directory containing a built `index.html` and this
-  will use it in preference to JSME.
-- **A plain paste box** — the fallback when nothing can be fetched, so
-  `ligand3d sketch` still does something useful on an air-gapped machine.
+  servable page: `ketcher-standalone.zip` contains `index.js`, `main.js`, and
+  type declarations, and no HTML at all, so it cannot simply be unzipped and
+  served. Point `LIGAND3D_KETCHER_DIR` at a directory containing a built
+  `index.html` and it is used in preference to JSME.
+
+Everything is bound to 127.0.0.1 and nothing leaves the machine.
 """
 
 from __future__ import annotations
@@ -33,8 +33,16 @@ import webbrowser
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ..errors import Ligand3DError
+from .session import (
+    JobStore,
+    backend_catalog,
+    inspect_target,
+    next_filename,
+    run_job,
+)
 
 JSME_RELEASE = "JSME_2024-04-29"
 JSME_URL = (
@@ -44,6 +52,7 @@ JSME_URL = (
 
 _HERE = Path(__file__).parent
 _STATIC = _HERE / "static"
+_MAX_BODY = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -62,9 +71,11 @@ class Engine:
 def _extract(payload: bytes, target: Path, strip_prefix: str | None = None) -> None:
     """Unpack a zip, optionally dropping one leading path component.
 
-    Skips the `__MACOSX` metadata directories that these archives carry.
+    Skips the `__MACOSX` metadata these archives carry, and refuses members whose
+    path would escape the target directory.
     """
     target.mkdir(parents=True, exist_ok=True)
+    root = target.resolve()
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         for member in archive.infolist():
             name = member.filename
@@ -76,7 +87,11 @@ def _extract(payload: bytes, target: Path, strip_prefix: str | None = None) -> N
                 name = name[len(strip_prefix) :]
             if not name or name.endswith("/"):
                 continue
-            destination = target / name
+            destination = (target / name).resolve()
+            try:
+                destination.relative_to(root)
+            except ValueError:
+                continue  # zip-slip attempt
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source, open(destination, "wb") as out:
                 shutil.copyfileobj(source, out)
@@ -116,44 +131,88 @@ def choose_engine(quiet: bool = False) -> Engine | None:
 
     ketcher = ketcher_dir()
     if (ketcher / "index.html").exists():
-        return Engine(name="ketcher", root=ketcher, page="bridge_ketcher.html")
+        return Engine(name="ketcher", root=ketcher, page="app.html")
 
     jsme = ensure_jsme(quiet=quiet)
     if jsme is not None:
-        return Engine(name="jsme", root=jsme, page="bridge_jsme.html")
+        return Engine(name="jsme", root=jsme, page="app.html")
 
     return None
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
-    """Serves the bridge page, the sketcher assets, and accepts one submission."""
+    """Serves the app, the sketcher assets, and the build API."""
 
-    result: dict = {}
-    done: threading.Event
     engine: Engine | None = None
+    jobs: JobStore
+    defaults: dict[str, Any] = {}
 
     def log_message(self, *args) -> None:  # silence the default access log
         pass
 
+    # ---- plumbing --------------------------------------------------------
     def _send(self, code: int, body: bytes, content_type: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the tab went away mid-response
 
+    def _json(self, payload: Any, code: int = 200) -> None:
+        self._send(code, json.dumps(payload).encode(), "application/json")
+
+    def _read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > _MAX_BODY:
+            return {}
+        raw = self.rfile.read(length).decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"molblock": raw}
+        return parsed if isinstance(parsed, dict) else {}
+
+    # ---- GET -------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
         path = urllib.parse.unquote(self.path.split("?", 1)[0])
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
         if path in ("/", "/index.html"):
             page = self.engine.bridge if self.engine else _STATIC / "fallback.html"
             self._send(200, page.read_bytes(), "text/html; charset=utf-8")
             return
 
-        if path == "/status":
-            body = {"engine": self.engine.name if self.engine else None}
-            self._send(200, json.dumps(body).encode(), "application/json")
+        if path == "/api/config":
+            self._json(
+                {
+                    "engine": self.engine.name if self.engine else None,
+                    "backends": backend_catalog(),
+                    "defaults": self.defaults,
+                }
+            )
+            return
+
+        if path == "/api/next-name":
+            directory = (query.get("directory") or [self.defaults.get("directory", ".")])[0]
+            stem = (query.get("stem") or ["sketch"])[0]
+            self._json({"filename": next_filename(directory, stem=stem)})
+            return
+
+        if path.startswith("/api/job/"):
+            try:
+                job_id = int(path.rsplit("/", 1)[1])
+            except ValueError:
+                self._json({"error": "bad job id"}, 400)
+                return
+            job = self.jobs.get(job_id)
+            if job is None:
+                self._json({"error": f"no job {job_id}"}, 404)
+                return
+            self._json(job.to_json())
             return
 
         if path.startswith("/sketcher/") and self.engine:
@@ -176,27 +235,64 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             return
         self._send(200, target.read_bytes(), self.guess_type(str(target)))
 
+    # ---- POST ------------------------------------------------------------
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
-        if self.path.split("?", 1)[0] != "/submit":
-            self._send(404, b"not found", "text/plain")
+        path = self.path.split("?", 1)[0]
+
+        if path == "/api/check-path":
+            data = self._read_json()
+            info = inspect_target(
+                data.get("directory", "."),
+                data.get("filename", "sketch0.pdb"),
+                write_sdf=bool(data.get("write_sdf", True)),
+            )
+            self._json(info.to_json())
             return
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length).decode("utf-8", errors="replace")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"molblock": raw}
 
-        self.result["molblock"] = payload.get("molblock", "")
-        self.result["smiles"] = payload.get("smiles", "")
-        self._send(200, json.dumps({"ok": True}).encode(), "application/json")
-        self.done.set()
+        if path == "/api/build":
+            self._start_build(self._read_json())
+            return
+
+        self._send(404, b"not found", "text/plain")
+
+    def _start_build(self, data: dict) -> None:
+        molblock = data.get("molblock") or ""
+        if not molblock.strip():
+            self._json({"error": "nothing was drawn"}, 400)
+            return
+
+        settings = data.get("settings") or {}
+        info = inspect_target(
+            settings.get("directory", "."),
+            settings.get("filename", "sketch0.pdb"),
+            write_sdf=bool(settings.get("write_sdf", True)),
+        )
+        if info.error:
+            self._json({"error": info.error}, 400)
+            return
+        if info.would_overwrite and not data.get("overwrite"):
+            # The page asks the user and retries with overwrite set.
+            self._json(
+                {
+                    "needs_confirmation": "overwrite",
+                    "target": info.to_json(),
+                },
+                409,
+            )
+            return
+
+        job = self.jobs.create()
+        thread = threading.Thread(
+            target=run_job, args=(job, molblock, settings, info), daemon=True
+        )
+        thread.start()
+        self._json({"job_id": job.id, "target": info.to_json()})
 
 
-class _Server(socketserver.TCPServer):
-    """TCP server that can rebind a port still in TIME_WAIT.
+class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    """Threaded so the page can poll a job's log while that job is running.
 
-    `allow_reuse_address` has to be a class attribute: TCPServer binds inside
+    `allow_reuse_address` has to be a class attribute: HTTPServer binds inside
     __init__, so setting it on the instance afterwards is too late and a second
     `ligand3d sketch` on the same port fails with EADDRINUSE.
     """
@@ -211,25 +307,27 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def sketch_molecule(
+def serve(
     port: int = 0,
     open_browser: bool = True,
-    timeout: float = 1800.0,
     quiet: bool = False,
-) -> str | None:
-    """Serve the sketcher and block until a molecule comes back.
+    defaults: dict[str, Any] | None = None,
+    block: bool = True,
+) -> tuple[_Server, int]:
+    """Start the sketcher session. Runs until interrupted.
 
-    Returns a molblock, or None if the page was closed without submitting.
+    Returns the server and its port. With `block=False` the caller is
+    responsible for shutting it down, which is what the tests do.
     """
     engine = choose_engine(quiet=quiet)
     if engine is None and not quiet:
-        print("no sketcher available; falling back to a paste box")
+        print("no sketcher available; serving the paste-box fallback")
 
     port = port or _free_port()
-    done = threading.Event()
-
     handler = type(
-        "_BoundHandler", (_Handler,), {"result": {}, "done": done, "engine": engine}
+        "_BoundHandler",
+        (_Handler,),
+        {"engine": engine, "jobs": JobStore(), "defaults": dict(defaults or {})},
     )
 
     try:
@@ -246,50 +344,21 @@ def sketch_molecule(
     url = f"http://127.0.0.1:{port}/"
     if not quiet:
         label = engine.name if engine else "paste box"
-        print(f"sketcher ({label}) running at {url}")
-        print("draw a molecule, then press 'Use this molecule'. Ctrl-C to cancel.")
+        print(f"ligand3d sketcher ({label}) running at {url}")
+        print("draw, set the options, and press Build. Ctrl-C to stop.")
     if open_browser:
         try:
             webbrowser.open(url)
         except Exception:
             pass
 
-    try:
-        done.wait(timeout=timeout)
-    except KeyboardInterrupt:
-        return None
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    return _to_molblock(handler.result)
-
-
-def _to_molblock(result: dict) -> str | None:
-    """Prefer the molblock; fall back to building one from a SMILES string.
-
-    The molblock is returned verbatim. Its first line is the molecule-name
-    field, which is routinely empty, so stripping leading whitespace shifts
-    every subsequent line up one and the counts line lands where the header
-    belongs — producing a file no parser will accept. Strip only to test
-    whether anything was sent.
-    """
-    molblock = result.get("molblock") or ""
-    if molblock.strip():
-        return molblock
-
-    smiles = (result.get("smiles") or "").strip()
-    if not smiles:
-        return None
-
-    from rdkit import Chem
-    from rdkit.Chem import AllChem
-
-    from ..molecule import rdkit_quiet
-
-    with rdkit_quiet():
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            return None
-        AllChem.Compute2DCoords(mol)
-        return Chem.MolToMolBlock(mol)
+    if block:
+        try:
+            thread.join()
+        except KeyboardInterrupt:
+            if not quiet:
+                print("\nstopping")
+        finally:
+            server.shutdown()
+            server.server_close()
+    return server, port

@@ -403,8 +403,8 @@ def require_defined_stereo(molecule: Molecule) -> None:
         )
     raise StereoError(
         "; ".join(parts)
-        + ". Specify it in the input, or pass --any-stereo to let RDKit pick one, "
-        "or --enumerate-stereo to build every isomer."
+        + ". Specify it in the drawing or SMILES, or pass '--stereo any' to let RDKit "
+        "pick one arbitrarily, or '--stereo enumerate' to build every isomer."
     )
 
 

@@ -261,12 +261,40 @@ def doctor() -> None:
                 console.print(f"      [dim]tried {attempt}[/dim]")
 
     console.print("\n[bold]model weights[/bold]")
-    for key in ("mace-off", "mace-off-small", "mace-off-large", "mace-mp"):
-        resolution = cfg.resolve_weights(key)
-        if resolution.found:
-            console.print(f"  [green]✓[/green] {key}: {resolution.path} [dim](via {resolution.via})[/dim]")
-        else:
-            console.print(f"  [yellow]✗[/yellow] {key}: not found")
+    found, missing = [], []
+    for spec in cfg.MODELS:
+        resolution = cfg.resolve_weights(spec.key)
+        (found if resolution.found else missing).append((spec, resolution))
+
+    # Group by the directory they were found in: on a cluster they all live in
+    # one place, and repeating a 90-character path 19 times is unreadable.
+    by_dir: dict[str, list] = {}
+    for spec, resolution in found:
+        by_dir.setdefault(str(resolution.path.parent.parent), []).append((spec, resolution))
+    for directory, entries in by_dir.items():
+        console.print(f"  in [cyan]{directory}[/cyan]:")
+        for spec, resolution in entries:
+            size = f"{spec.approx_mb} MB" if spec.approx_mb else ""
+            charge = "charge-aware" if spec.takes_charge else ""
+            console.print(
+                f"    [green]✓[/green] {spec.key:<16} "
+                f"[dim]{resolution.path.name}  {size}  {charge}[/dim]"
+            )
+    if missing:
+        console.print(
+            f"  [yellow]✗[/yellow] not found: "
+            f"[dim]{', '.join(spec.key for spec, _ in missing)}[/dim]"
+        )
+    if not found:
+        console.print(
+            "  [dim]On this cluster the checkpoints live in "
+            "/net/databases/huggingface/mlFF_models/, which is probed automatically.[/dim]"
+        )
+
+    if cfg.UNSUPPORTED_MODELS:
+        console.print("\n[bold]known but not loadable[/bold]")
+        for key, why in cfg.UNSUPPORTED_MODELS.items():
+            console.print(f"  [yellow]-[/yellow] {key}: [dim]{escape(why)}[/dim]")
 
     console.print("\n[bold]optional python packages[/bold]")
     for module, why in (
@@ -312,48 +340,31 @@ def sketch(
     no_browser: bool = typer.Option(
         False, "--no-browser", help="Print the URL instead of opening a browser."
     ),
-    output: Optional[Path] = typer.Option(
-        None, "--output", "-o", help="Write the drawn molecule's 3D structure here."
+    directory: Optional[Path] = typer.Option(
+        None, "--directory", "-d", help="Where built structures go. Defaults to the cwd."
     ),
-    backend: str = typer.Option("mmff94", "--backend", "-b", help="Minimization backend."),
-    smiles_only: bool = typer.Option(
-        False, "--smiles-only", help="Print the SMILES and exit without building 3D."
-    ),
+    backend: str = typer.Option("mmff94", "--backend", "-b", help="Backend preselected in the page."),
+    threads: int = typer.Option(4, "--threads", "-j", min=1, help="Threads preselected in the page."),
 ) -> None:
-    """Draw a molecule in the browser, then build it."""
-    from .sketch.server import sketch_molecule
+    """Draw molecules in the browser and build them, one after another.
 
+    The server stays up: draw, build, read the log, clear, draw the next one.
+    Every option in the page maps to a `ligand3d build` flag.
+    """
+    from .sketch.server import serve
+    from .sketch.session import next_filename
+
+    target = str((directory or Path.cwd()).expanduser().resolve())
+    defaults = {
+        "directory": target,
+        "filename": next_filename(target),
+        "backend": backend,
+        "threads": threads,
+    }
     try:
-        molblock = sketch_molecule(port=port, open_browser=not no_browser)
+        serve(port=port, open_browser=not no_browser, defaults=defaults)
     except Ligand3DError as exc:
         _fail(exc)
-        return
-    if molblock is None:
-        console.print("[yellow]no molecule was submitted[/yellow]")
-        raise typer.Exit(code=1)
-
-    from .molecule import from_molblock
-
-    try:
-        mol = from_molblock(molblock)
-    except Ligand3DError as exc:
-        _fail(exc)
-        return
-
-    console.print(f"[bold]drew:[/bold] {mol.smiles}")
-    if smiles_only:
-        return
-
-    from .pipeline import Settings, run
-
-    target = output or Path("sketch.pdb")
-    try:
-        outcomes = run(mol, Settings(backend=backend), output=target)
-    except Ligand3DError as exc:
-        _fail(exc)
-        return
-    for outcome in outcomes:
-        console.print(f"  [green]wrote[/green] {outcome.pdb_path}")
 
 
 @app.command()

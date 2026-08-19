@@ -31,8 +31,16 @@ xtb = ["tblite>=0.4", "ase>=3.22"]
 # Machine-learned potentials. Install torch from the CPU index first if you do not
 # have a GPU, otherwise pip pulls the multi-GB CUDA build:
 #   uv pip install torch --index-url https://download.pytorch.org/whl/cpu
-mlff = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]
+#
+# NOTE: [mace] and [fairchem] CANNOT share an environment. mace-torch pins
+# e3nn==0.4.4 and fairchem-core requires e3nn>=0.5. Install them in separate
+# virtualenvs; `ligand3d doctor` detects the clash and says so.
+mace = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]
+fairchem = ["ase>=3.22", "torch>=2.0", "fairchem-core>=2.20"]
+aimnet = ["ase>=3.22", "torch>=2.0"]
+mlff = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]  # alias for [mace]
 protonation = ["dimorphite-dl>=2.0"]
+# Everything that can coexist: the MACE side of the MLFF split.
 all = [
     "tblite>=0.4",
     "ase>=3.22",

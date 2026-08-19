@@ -136,11 +136,35 @@ class TestInformationalCommands:
         assert "backends" in result.output
         assert "model weights" in result.output
 
-    def test_doctor_does_not_mangle_install_hints(self):
-        """Rich treats [mlff] as a style tag; unescaped it vanishes from the hint."""
-        result = run("doctor")
-        if "pip install" in result.output:
-            assert "ligand3d'" not in result.output.replace("ligand3d[mlff]'", "")
+    def test_doctor_does_not_mangle_bracketed_extras(self):
+        """Rich reads `[mace]` as a style tag and eats it unless it is escaped.
+
+        Any hint naming an extra must still show the brackets, otherwise doctor
+        tells people to run `pip install 'ligand3d'` — the one command that will
+        not fix their problem.
+        """
+        from ligand3d.minimize import all_backends
+
+        hints = []
+        for backend in all_backends():
+            hint = getattr(backend, "install_hint", lambda: "")()
+            if "ligand3d[" in hint:
+                hints.append(hint)
+        if not hints:
+            pytest.skip("no backend advertises a bracketed extra")
+
+        output = run("doctor").output
+        # At least one bracketed extra should appear intact somewhere.
+        extras = {h.split("ligand3d[", 1)[1].split("]", 1)[0] for h in hints}
+        assert any(f"ligand3d[{name}]" in output for name in extras), (
+            f"none of {sorted(extras)} survived Rich markup"
+        )
+
+    def test_doctor_lists_model_weights_and_unsupported_models(self):
+        output = run("doctor").output
+        assert "model weights" in output
+        assert "known but not loadable" in output
+        assert "mace-polar" in output
 
     def test_version(self):
         from ligand3d import __version__

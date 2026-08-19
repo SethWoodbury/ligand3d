@@ -1,7 +1,7 @@
 # ligand3d — design
 
 **Date:** 2026-08-18
-**Status:** approved, implementing
+**Status:** implemented. See the addendum at the end for what changed in practice.
 
 ## Purpose
 
@@ -260,3 +260,91 @@ ligand3d/
 4. Conformer search: RDKit tier, then CREST.
 5. MLFF backends.
 6. Sketcher.
+
+
+---
+
+# Addendum, 2026-08-19
+
+## The machine-learned force fields on this cluster
+
+`/net/databases/huggingface/mlFF_models/` holds 19 model families, and that path is now
+one of the built-in probe locations, so they resolve with no configuration. `config.MODELS`
+is a single table describing each checkpoint — filename patterns, whether it consumes
+total charge, which head to select, approximate size — and `minimize/mlff.py` derives one
+backend per row from it. Adding a model is one table entry.
+
+Eighteen of them load. Every `takes_charge` flag was set by measurement, not by reading
+documentation: set `atoms.info["charge"]`, evaluate, and see whether the energy moved.
+
+- **charge-aware:** MACE-omol, all eSEN, all UMA, both AllScAIP, AIMNet2
+- **not charge-aware:** MACE-OFF23/24, MACE-MP, all multi-head MACE
+
+That last one is worth stating plainly because it is counter-intuitive: the multi-head
+MACE checkpoints have an `omol` head trained on charged data, but the calculator ignores
+`atoms.info["charge"]` entirely. They are therefore registered with `takes_charge=False`
+and the registry refuses to hand them an ion.
+
+Two other discoveries about the MACE family:
+
+- The multi-head checkpoints **refuse to load without a head selected**, and none of them
+  names a head `default`. `ligand3d` picks one per registry entry (`omol`, or
+  `spice_wB97M` for `mace-mh-spice`).
+- MACE-POLAR-1 needs `graph_longrange` and a patched MACE fork. It cannot be installed
+  from PyPI, so it is listed in `UNSUPPORTED_MODELS` with the reason, alongside SO3LR
+  (JAX) and orb-mol (orb-models 0.7 removed its ASE calculator).
+
+### The dependency conflict that shapes the install
+
+`mace-torch` pins `e3nn==0.4.4`; `fairchem-core` requires `e3nn>=0.5`. There is no
+version of either that resolves this, so **they cannot share an environment**. Installing
+the second one silently breaks the first, and the failure surfaces as
+`ValueError: too many values to unpack` from inside e3nn's codegen pickling — a message
+that points nowhere near the cause.
+
+`[mace]` and `[fairchem]` are therefore separate extras, and both backend families check
+the installed e3nn version in `available()` and report the clash in plain language. This
+is the kind of problem that has to be detected rather than documented, because nobody
+reads the documentation until after the crash.
+
+## The sketcher became a session
+
+The original design had `ligand3d sketch` capture one molblock and exit. That is wrong for
+how the tool is actually used: you draw several molecules in a row and want to see what
+happened to each. It is now a persistent server with a small JSON API:
+
+| endpoint | purpose |
+|---|---|
+| `GET /api/config` | backend catalog with availability, plus defaults |
+| `GET /api/next-name` | first unused `sketch{N}.pdb` in the target directory |
+| `POST /api/check-path` | resolve a target; report creation, overwrite, writability |
+| `POST /api/build` | start a build; `409` if it would overwrite and no confirmation |
+| `GET /api/job/{id}` | poll state and log |
+
+Builds run on a background thread against a `ThreadingHTTPServer`, so the page polls the
+log while the work proceeds. That matters for CREST, which takes minutes.
+
+The overwrite flow is a deliberate two-step: the server returns `409` with the list of
+files that exist, the page asks, and only a request carrying `overwrite: true` writes
+anything. Nothing is clobbered without a human saying so.
+
+The run log reports what the user asked for: how many stereocenters were found and their
+R/S codes, double-bond geometry, a warning when the drawing contains more than one
+fragment, the full text of any refusal, and the path of every file written.
+
+One reporting subtlety: constrained bridgeheads must not be described as "left undefined".
+3-quinuclidinone has two atoms that a graph analysis flags as stereogenic and that cannot
+actually vary, and telling the user they are undefined sends them looking for a problem
+that does not exist.
+
+## Drawing dashed bonds
+
+Verified rather than assumed: with all wedge flags cleared and exactly one bond set,
+molfile bond flag 1 (wedge) reads back as *R* and flag 6 (hash) as *S* for the same 2D
+layout. Both directions work, and there is a regression test.
+
+In JSME there is no separate dash tool — the wedge tool cycles a bond wedge → hash →
+plain on repeated clicks. The page says so inline, because it is not discoverable.
+
+The JSME options string was also wrong: it passed `oldlook,star,newlook`, which asks for
+the old and new look simultaneously. It is now `stereo,autoez,paste,multipart`.

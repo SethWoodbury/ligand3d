@@ -1,19 +1,24 @@
-"""The browser sketcher, driven the way a browser drives it."""
+"""The browser session: the API the page actually calls."""
 
 from __future__ import annotations
 
 import json
-import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from ligand3d.molecule import from_molblock
 from ligand3d.sketch import server as srv
+from ligand3d.sketch.session import (
+    backend_catalog,
+    describe_stereo,
+    inspect_target,
+    next_filename,
+)
 
 
 def molblock_for(smiles: str) -> str:
@@ -24,110 +29,301 @@ def molblock_for(smiles: str) -> str:
     return Chem.MolToMolBlock(mol, kekulize=True)
 
 
-class TestMolblockHandling:
-    """`_to_molblock` must not touch the bytes it was given.
+class TestTargetInspection:
+    """The page shows where files will land before writing anything."""
 
-    A MOL file's first line is the molecule-name field and is routinely empty.
-    Stripping leading whitespace shifts every later line up one, so the counts
-    line lands where the header belongs and nothing can parse the result.
-    """
+    def test_resolves_directory_and_forces_pdb_suffix(self, tmp_path):
+        info = inspect_target(str(tmp_path), "thing.xyz")
+        assert info.filename == "thing.pdb"
+        assert info.pdb == str(tmp_path / "thing.pdb")
+        assert info.sdf == str(tmp_path / "thing.sdf")
+        assert info.directory_exists
+        assert not info.will_create_directory
+        assert info.error is None
 
-    def test_leading_blank_line_is_preserved(self):
-        original = molblock_for("C[C@H](N)C(=O)O")
-        assert original.startswith("\n"), "test premise: RDKit emits an empty name line"
+    def test_flags_a_directory_that_would_be_created(self, tmp_path):
+        info = inspect_target(str(tmp_path / "new" / "deeper"), "a.pdb")
+        assert info.will_create_directory
+        assert info.writable
+        assert info.error is None
 
-        returned = srv._to_molblock({"molblock": original})
-        assert returned == original
-        assert from_molblock(returned).smiles == "C[C@H](N)C(=O)O"
+    def test_reports_existing_files_as_an_overwrite(self, tmp_path):
+        (tmp_path / "a.pdb").write_text("x")
+        info = inspect_target(str(tmp_path), "a.pdb")
+        assert info.would_overwrite
+        assert str(tmp_path / "a.pdb") in info.existing
 
-    def test_smiles_fallback_builds_a_parseable_molblock(self):
-        returned = srv._to_molblock({"molblock": "", "smiles": "C[C@H](N)C(=O)O"})
-        assert from_molblock(returned).smiles == "C[C@H](N)C(=O)O"
+    def test_sdf_is_excluded_when_not_requested(self, tmp_path):
+        (tmp_path / "a.sdf").write_text("x")
+        assert not inspect_target(str(tmp_path), "a.pdb", write_sdf=False).would_overwrite
+        assert inspect_target(str(tmp_path), "a.pdb", write_sdf=True).would_overwrite
 
-    def test_molblock_wins_over_smiles(self):
-        returned = srv._to_molblock(
-            {"molblock": molblock_for("CCO"), "smiles": "c1ccccc1"}
-        )
-        assert from_molblock(returned).smiles == "CCO"
+    def test_unwritable_location_is_an_error(self):
+        info = inspect_target("/proc/nope/deeper", "a.pdb")
+        assert info.error is not None
 
-    def test_nothing_submitted_gives_none(self):
-        assert srv._to_molblock({"molblock": "   ", "smiles": ""}) is None
-        assert srv._to_molblock({}) is None
+    def test_a_file_where_a_directory_should_be_is_an_error(self, tmp_path):
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        assert inspect_target(str(blocker), "a.pdb").error is not None
 
-    def test_unparseable_smiles_fallback_gives_none(self):
-        assert srv._to_molblock({"molblock": "", "smiles": "not a molecule"}) is None
+    def test_empty_filename_gets_a_default(self, tmp_path):
+        assert inspect_target(str(tmp_path), "   ").filename == "sketch0.pdb"
+
+    def test_path_components_in_the_filename_are_stripped(self, tmp_path):
+        info = inspect_target(str(tmp_path), "../../escape.pdb")
+        assert info.filename == "escape.pdb"
+        assert info.pdb == str(tmp_path / "escape.pdb")
+
+
+class TestFilenameSequence:
+    """Successive builds should not need the user to invent names."""
+
+    def test_starts_at_zero(self, tmp_path):
+        assert next_filename(str(tmp_path)) == "sketch0.pdb"
+
+    def test_skips_names_already_taken(self, tmp_path):
+        for n in (0, 1, 2, 4):
+            (tmp_path / f"sketch{n}.pdb").write_text("x")
+        assert next_filename(str(tmp_path)) == "sketch3.pdb"
+
+    def test_honours_a_custom_stem(self, tmp_path):
+        (tmp_path / "lig0.pdb").write_text("x")
+        assert next_filename(str(tmp_path), stem="lig") == "lig1.pdb"
+
+    def test_missing_directory_starts_at_zero(self, tmp_path):
+        assert next_filename(str(tmp_path / "absent")) == "sketch0.pdb"
+
+
+class TestStereoNarration:
+    """What the run log says about stereochemistry."""
+
+    def test_reports_each_centre_with_its_cip_code(self):
+        from ligand3d.molecule import from_smiles
+
+        lines = describe_stereo(from_smiles("C[C@@H](O)[C@H](N)C(=O)O"))
+        joined = " ".join(lines)
+        assert "2 stereocenter(s) defined" in joined
+        assert "= R" in joined and "= S" in joined
+
+    def test_reports_a_genuine_ambiguity_as_such(self):
+        from ligand3d.molecule import from_smiles
+
+        joined = " ".join(describe_stereo(from_smiles("CC(N)C(=O)O")))
+        assert "left undefined" in joined and "ambiguous" in joined
+
+    def test_does_not_call_constrained_bridgeheads_undefined(self):
+        """3-quinuclidinone's bridgeheads look stereogenic but cannot vary."""
+        from ligand3d.molecule import from_smiles
+
+        joined = " ".join(describe_stereo(from_smiles("O=C1CN2CCC1CC2")))
+        assert "fixed by the ring system" in joined
+        assert "left undefined" not in joined
+
+    def test_reports_double_bond_geometry(self):
+        from ligand3d.molecule import from_smiles
+
+        joined = " ".join(describe_stereo(from_smiles(r"C/C=C/C(=O)O")))
+        assert "double bond(s) with geometry" in joined
+
+
+def test_backend_catalog_reports_capabilities():
+    catalog = {b["id"]: b for b in backend_catalog()}
+    assert "mmff94" in catalog and catalog["mmff94"]["ready"]
+    # The capability that drives the whole registry.
+    assert catalog["gfn2"]["takes_charge"] and catalog["gfn2"]["supports_solvation"]
+    assert not catalog["mace-off"]["takes_charge"]
+    for entry in catalog.values():
+        assert entry["ready"] or entry["reason"], f"{entry['id']} unavailable with no reason"
 
 
 @pytest.fixture
-def running_server(monkeypatch):
-    """Serve the paste-box fallback so the test needs no download.
-
-    Each test gets its own port; sharing one races against the previous
-    server's shutdown.
-    """
+def session(tmp_path, monkeypatch):
+    """A running session server, serving the paste-box fallback."""
     monkeypatch.setattr(srv, "choose_engine", lambda quiet=False: None)
 
-    port = srv._free_port()
-    captured: dict[str, str | None] = {"base": f"http://127.0.0.1:{port}"}
-
-    def serve():
-        captured["molblock"] = srv.sketch_molecule(
-            port=port, open_browser=False, timeout=30, quiet=True
-        )
-
-    thread = threading.Thread(target=serve, daemon=True)
-    thread.start()
-
+    server, port = srv.serve(
+        port=0,
+        open_browser=False,
+        quiet=True,
+        block=False,
+        defaults={"directory": str(tmp_path), "filename": "sketch0.pdb",
+                  "backend": "mmff94", "threads": 2},
+    )
+    base = f"http://127.0.0.1:{port}"
     for _ in range(50):
         try:
-            urllib.request.urlopen(f"{captured['base']}/status", timeout=1)
+            urllib.request.urlopen(f"{base}/api/config", timeout=1)
             break
         except Exception:
             time.sleep(0.1)
     else:
-        pytest.fail("sketch server never came up")
+        server.shutdown(); server.server_close()
+        pytest.fail("session server never came up")
 
-    yield captured
+    yield base, tmp_path
 
-    if thread.is_alive():
-        try:
-            _post(captured["base"], {"smiles": "C"})  # release the blocking wait
-        except Exception:
-            pass
-    thread.join(timeout=10)
+    server.shutdown()
+    server.server_close()
 
 
-def _post(base: str, payload: dict) -> str:
+def _get(base: str, path: str):
+    return json.load(urllib.request.urlopen(base + path, timeout=20))
+
+
+def _post(base: str, path: str, body: dict) -> tuple[int, dict]:
     request = urllib.request.Request(
-        f"{base}/submit",
-        data=json.dumps(payload).encode(),
+        base + path,
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
-    return urllib.request.urlopen(request, timeout=5).read().decode()
+    try:
+        response = urllib.request.urlopen(request, timeout=120)
+        return response.status, json.load(response)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.load(exc)
 
 
-def _wait_for_molblock(captured: dict) -> str:
-    for _ in range(100):
-        if captured.get("molblock"):
-            return captured["molblock"]
+def _run(base: str, smiles: str, settings: dict, overwrite: bool = False) -> dict:
+    code, data = _post(
+        base,
+        "/api/build",
+        {"molblock": molblock_for(smiles), "settings": settings, "overwrite": overwrite},
+    )
+    if code != 200:
+        return {"http": code, **data}
+    for _ in range(600):
+        job = _get(base, f"/api/job/{data['job_id']}")
+        if job["state"] in ("done", "error"):
+            return {"http": 200, **job}
         time.sleep(0.1)
-    pytest.fail("server never returned a molblock")
+    pytest.fail("job never finished")
 
 
-class TestServer:
-    def test_serves_the_fallback_page(self, running_server):
-        page = (
-            urllib.request.urlopen(f"{running_server['base']}/", timeout=5).read().decode()
+def _settings(tmp_path, **overrides) -> dict:
+    base = {
+        "directory": str(tmp_path),
+        "filename": "sketch0.pdb",
+        "backend": "mmff94",
+        "write_sdf": True,
+        "protonation": "as-drawn",
+        "n_confs": 1,
+        "conf_method": "rdkit",
+        "stereo_mode": "require",
+        "threads": 2,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestSessionAPI:
+    def test_config_lists_backends_and_defaults(self, session):
+        base, tmp_path = session
+        cfg = _get(base, "/api/config")
+        assert cfg["defaults"]["directory"] == str(tmp_path)
+        assert any(b["id"] == "mmff94" for b in cfg["backends"])
+
+    def test_serves_a_page(self, session):
+        base, _ = session
+        page = urllib.request.urlopen(base + "/", timeout=5).read().decode()
+        assert "ligand3d" in page
+
+    def test_next_name_endpoint(self, session):
+        base, tmp_path = session
+        (tmp_path / "sketch0.pdb").write_text("x")
+        query = urllib.parse.urlencode({"directory": str(tmp_path), "stem": "sketch"})
+        assert _get(base, f"/api/next-name?{query}")["filename"] == "sketch1.pdb"
+
+    def test_check_path_endpoint(self, session):
+        base, tmp_path = session
+        _, info = _post(base, "/api/check-path",
+                        {"directory": str(tmp_path / "sub"), "filename": "a.pdb"})
+        assert info["will_create_directory"]
+
+    def test_build_writes_the_files_and_logs_stereo(self, session):
+        base, tmp_path = session
+        job = _run(base, "C[C@@H](O)[C@H](N)C(=O)O", _settings(tmp_path))
+
+        assert job["state"] == "done", job
+        assert (tmp_path / "sketch0.pdb").exists()
+        assert (tmp_path / "sketch0.sdf").exists()
+
+        text = " ".join(entry["text"] for entry in job["log"])
+        assert "2 stereocenter(s) defined" in text
+        assert str(tmp_path / "sketch0.pdb") in text
+        assert job["result"]["n_conformers"] == 1
+        assert len(job["result"]["stereocenters"]) == 2
+
+    def test_two_builds_in_one_session(self, session):
+        base, tmp_path = session
+        first = _run(base, "CCO", _settings(tmp_path, filename="sketch0.pdb"))
+        second = _run(base, "O=C1CN2CCC1CC2", _settings(tmp_path, filename="sketch1.pdb"))
+        assert first["state"] == "done" and second["state"] == "done"
+        assert (tmp_path / "sketch0.pdb").exists()
+        assert (tmp_path / "sketch1.pdb").exists()
+
+    def test_overwrite_needs_confirmation_then_proceeds(self, session):
+        base, tmp_path = session
+        assert _run(base, "CCO", _settings(tmp_path))["state"] == "done"
+
+        blocked = _run(base, "CCC", _settings(tmp_path))
+        assert blocked["http"] == 409
+        assert blocked["needs_confirmation"] == "overwrite"
+        assert blocked["target"]["existing"]
+
+        confirmed = _run(base, "CCC", _settings(tmp_path), overwrite=True)
+        assert confirmed["state"] == "done"
+
+    def test_empty_submission_is_rejected(self, session):
+        base, _ = session
+        code, data = _post(base, "/api/build", {"molblock": "   ", "settings": {}})
+        assert code == 400 and "error" in data
+
+    def test_two_fragments_are_reported_in_the_log(self, session):
+        base, tmp_path = session
+        job = _run(base, "CCO.CCO", _settings(tmp_path))
+        assert job["state"] == "error"
+        text = " ".join(entry["text"] for entry in job["log"])
+        assert "2 separate fragments" in text
+        assert "disconnected fragments" in job["error"]
+
+    def test_undefined_stereo_is_reported_in_the_log(self, session):
+        base, tmp_path = session
+        job = _run(base, "CC(N)C(=O)O", _settings(tmp_path))
+        assert job["state"] == "error"
+        assert "undefined stereocenters" in job["error"]
+
+    def test_protonation_mode_reaches_the_pipeline(self, session):
+        base, tmp_path = session
+        pytest.importorskip("dimorphite_dl")
+        job = _run(
+            base,
+            "NCC1(CC(=O)O)CCCCC1",
+            _settings(tmp_path, protonation="ph", ph=7.4),
         )
-        assert "Paste a structure" in page
+        assert job["state"] == "done", job
+        built = next(iter(Chem.SDMolSupplier(str(tmp_path / "sketch0.sdf"), removeHs=False)))
+        charges = [a.GetFormalCharge() for a in built.GetAtoms()]
+        assert any(c > 0 for c in charges) and any(c < 0 for c in charges)
 
-    def test_status_reports_no_engine(self, running_server):
-        body = (
-            urllib.request.urlopen(f"{running_server['base']}/status", timeout=5)
-            .read()
-            .decode()
-        )
-        assert json.loads(body) == {"engine": None}
+    def test_conformer_count_reaches_the_pipeline(self, session):
+        base, tmp_path = session
+        job = _run(base, "CCCCCCCCO", _settings(tmp_path, n_confs=6))
+        assert job["state"] == "done"
+        assert job["result"]["n_conformers"] > 1
+
+    def test_unknown_backend_is_an_error_not_a_crash(self, session):
+        base, tmp_path = session
+        job = _run(base, "CCO", _settings(tmp_path, backend="not-a-backend"))
+        assert job["state"] == "error"
+        assert "unknown backend" in job["error"]
+
+    def test_directory_is_created_when_missing(self, session):
+        base, tmp_path = session
+        target = tmp_path / "made" / "here"
+        job = _run(base, "CCO", _settings(tmp_path, directory=str(target)))
+        assert job["state"] == "done"
+        assert (target / "sketch0.pdb").exists()
 
     @pytest.mark.parametrize(
         "path",
@@ -138,67 +334,81 @@ class TestServer:
             "/sketcher/..%2f..%2fetc%2fpasswd",
         ],
     )
-    def test_path_traversal_is_refused(self, running_server, path):
-        """The server reads files off disk, so this guard has to hold."""
+    def test_path_traversal_is_refused(self, session, path):
+        base, _ = session
         try:
-            response = urllib.request.urlopen(f"{running_server['base']}{path}", timeout=5)
+            response = urllib.request.urlopen(base + path, timeout=5)
         except urllib.error.HTTPError as exc:
             assert exc.code in (403, 404)
             return
         assert b"root:" not in response.read()[:512]
 
-    def test_unknown_post_target_is_refused(self, running_server):
-        request = urllib.request.Request(
-            f"{running_server['base']}/anything", data=b"{}", method="POST"
-        )
+    def test_unknown_endpoints_404(self, session):
+        base, _ = session
+        for method, path in (("GET", "/nope"), ("POST", "/api/nope")):
+            request = urllib.request.Request(
+                base + path, data=b"{}" if method == "POST" else None, method=method
+            )
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(request, timeout=5)
+            assert exc.value.code == 404
+
+    def test_missing_job_404s(self, session):
+        base, _ = session
         with pytest.raises(urllib.error.HTTPError) as exc:
-            urllib.request.urlopen(request, timeout=5)
+            urllib.request.urlopen(base + "/api/job/999999", timeout=5)
         assert exc.value.code == 404
 
-    def test_submitted_smiles_keeps_its_stereo(self, running_server):
-        assert json.loads(
-            _post(running_server["base"], {"smiles": "C[C@H](N)C(=O)O", "molblock": ""})
-        )["ok"]
-        assert from_molblock(_wait_for_molblock(running_server)).smiles == "C[C@H](N)C(=O)O"
 
-    def test_submitted_molblock_keeps_its_wedge_stereo(self, running_server):
-        """A drawn wedge bond must arrive as a real stereocenter."""
-        assert json.loads(
-            _post(running_server["base"], {"molblock": molblock_for("C[C@@H](N)C(=O)O")})
-        )["ok"]
-
-        molecule = from_molblock(_wait_for_molblock(running_server))
-        assert molecule.smiles == "C[C@@H](N)C(=O)O"
-        assert dict(molecule.stereo.assigned_centers) == {1: "R"}
-
-    def test_malformed_json_body_is_treated_as_a_raw_molblock(self, running_server):
-        raw = molblock_for("CCO")
-        request = urllib.request.Request(
-            f"{running_server['base']}/submit", data=raw.encode(), method="POST"
-        )
-        urllib.request.urlopen(request, timeout=5).read()
-        assert from_molblock(_wait_for_molblock(running_server)).smiles == "CCO"
-
-
-class TestEngineSelection:
-    def test_ketcher_is_preferred_when_the_user_supplied_a_build(self, tmp_path, monkeypatch):
-        build = tmp_path / "ketcher"
-        build.mkdir()
-        (build / "index.html").write_text("<html></html>")
-        monkeypatch.setenv("LIGAND3D_KETCHER_DIR", str(build))
-
-        from ligand3d import config
-
-        config.load_config.cache_clear()
-        engine = srv.choose_engine(quiet=True)
-        assert engine is not None and engine.name == "ketcher"
-        assert engine.bridge.exists()
-
-    def test_bridge_pages_all_exist(self):
-        for page in ("bridge_jsme.html", "bridge_ketcher.html", "fallback.html"):
-            assert (srv._STATIC / page).is_file(), f"missing {page}"
-
-    def test_jsme_bridge_links_the_loader_it_serves(self):
-        """The page and the asset route have to agree on the path."""
-        page = (srv._STATIC / "bridge_jsme.html").read_text()
+class TestStaticAssets:
+    def test_app_page_exists_and_wires_the_loader(self):
+        page = (srv._STATIC / "app.html").read_text()
         assert "/sketcher/jsme/jsme.nocache.js" in page
+        # The page must explain how to draw a dashed bond, not just a wedge.
+        assert "dashed" in page.lower()
+        for endpoint in ("/api/config", "/api/build", "/api/check-path", "/api/next-name"):
+            assert endpoint in page, f"page never calls {endpoint}"
+
+    def test_fallback_page_exists(self):
+        assert (srv._STATIC / "fallback.html").is_file()
+
+
+class TestAppJavaScript:
+    """The page's logic is not exercised by the Python tests, so at minimum it
+    must parse. A typo in here is otherwise only visible in a browser console."""
+
+    @staticmethod
+    def _inline_script() -> str:
+        import re
+
+        html = (srv._STATIC / "app.html").read_text()
+        blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.S)
+        assert blocks, "app.html has no inline script"
+        return blocks[-1]
+
+    def test_parses(self, tmp_path):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node") or shutil.which("nodejs")
+        if node is None:
+            pytest.skip("node not available to parse the script")
+
+        script = tmp_path / "app.js"
+        script.write_text(self._inline_script())
+        result = subprocess.run(
+            [node, "--check", str(script)], capture_output=True, text=True, timeout=60
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_every_referenced_element_id_exists(self):
+        """`el("typo")` returns null and fails silently at runtime."""
+        import re
+
+        html = (srv._STATIC / "app.html").read_text()
+        defined = set(re.findall(r'\bid="([A-Za-z0-9_]+)"', html))
+        referenced = set(re.findall(r'\bel\("([A-Za-z0-9_]+)"\)', self._inline_script()))
+        # pasteBox and ketcherFrame are injected by script, not present in markup.
+        injected = {"pasteBox", "ketcherFrame"}
+        missing = referenced - defined - injected
+        assert not missing, f"app.html references undefined ids: {sorted(missing)}"

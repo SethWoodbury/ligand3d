@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ligand3d</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --fg: #16181d; --muted: #5c6370;
+    --border: #dcdfe5; --accent: #2f6f4f; --accent-fg: #ffffff;
+    --field: #ffffff; --ok: #1e7a4d; --warn: #9a6512; --err: #b3352b;
+    --logbg: #fbfbfc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101216; --panel: #181b21; --fg: #e8eaee; --muted: #98a0ac;
+      --border: #2b3038; --accent: #4c9a72; --accent-fg: #0b0d10;
+      --field: #14171c; --ok: #55b784; --warn: #d9a13c; --err: #e2695e;
+      --logbg: #12151a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap;
+    padding: .65rem 1rem; background: var(--panel);
+    border-bottom: 1px solid var(--border); flex: none;
+  }
+  h1 { font-size: 1rem; margin: 0; font-weight: 660; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: .82rem; }
+  .grow { flex: 1; }
+  .engine {
+    font-size: .72rem; color: var(--muted); border: 1px solid var(--border);
+    padding: .12rem .45rem; border-radius: 99px; font-family: ui-monospace, monospace;
+  }
+
+  main {
+    flex: 1; display: grid; gap: 1rem; padding: 1rem;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+    align-items: start; min-height: 0;
+  }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: .9rem 1rem;
+  }
+  .card h2 {
+    font-size: .78rem; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 0 0 .7rem; font-weight: 650;
+  }
+  .stack { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
+  #canvasCard { display: flex; flex-direction: column; gap: .7rem; }
+  #sketchHost { min-height: 420px; }
+  #ketcherFrame { width: 100%; height: 460px; border: 1px solid var(--border); border-radius: 6px; }
+  .tip {
+    color: var(--muted); font-size: .8rem; background: var(--logbg);
+    border: 1px solid var(--border); border-radius: 6px; padding: .5rem .65rem;
+  }
+  .tip b { color: var(--fg); font-weight: 620; }
+
+  label { display: block; font-size: .8rem; font-weight: 600; margin-bottom: .28rem; }
+  .row { display: grid; gap: .6rem; margin-bottom: .7rem; }
+  .row.two { grid-template-columns: 1fr 1fr; }
+  .row.pathrow { grid-template-columns: 1fr 12rem; }
+  @media (max-width: 560px) { .row.two, .row.pathrow { grid-template-columns: 1fr; } }
+
+  input[type=text], input[type=number], select {
+    width: 100%; font: inherit; font-size: .86rem; padding: .42rem .55rem;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--field); color: var(--fg);
+  }
+  input[type=text], select { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .checks { display: flex; flex-wrap: wrap; gap: .45rem 1.1rem; margin: .2rem 0 .7rem; }
+  .checks label {
+    display: flex; align-items: center; gap: .38rem; margin: 0;
+    font-weight: 450; font-size: .82rem; cursor: pointer;
+  }
+  .checks input { margin: 0; }
+  .hint { color: var(--muted); font-size: .76rem; margin: -.35rem 0 .7rem; }
+
+  .actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; font-weight: 620; cursor: pointer; font-size: .86rem;
+    padding: .5rem 1rem; border-radius: 6px;
+    border: 1px solid transparent; background: var(--accent); color: var(--accent-fg);
+  }
+  button.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
+  button:disabled { opacity: .5; cursor: default; }
+
+  #pathPreview {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .78rem; color: var(--muted); word-break: break-all;
+    border-left: 2px solid var(--border); padding-left: .6rem; margin: -.2rem 0 .8rem;
+  }
+  #pathPreview .warn { color: var(--warn); }
+  #pathPreview .err { color: var(--err); }
+  #pathPreview .ok { color: var(--ok); }
+
+  #log {
+    background: var(--logbg); border: 1px solid var(--border); border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem;
+    padding: .6rem .7rem; height: 15rem; overflow-y: auto; white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #log .line { display: block; }
+  #log .info  { color: var(--fg); }
+  #log .muted { color: var(--muted); }
+  #log .ok    { color: var(--ok); }
+  #log .warn  { color: var(--warn); }
+  #log .error { color: var(--err); }
+  #log .rule  { color: var(--muted); opacity: .6; }
+
+  dialog {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+    color: var(--fg); max-width: 34rem; padding: 1.1rem 1.2rem;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog p { margin: .4rem 0 .9rem; }
+  dialog ul {
+    margin: 0 0 1rem; padding-left: 1.1rem;
+    font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>ligand3d</h1>
+  <span class="sub">draw a 2D molecule &rarr; minimized 3D structure</span>
+  <span class="grow"></span>
+  <span class="engine" id="engineTag">loading…</span>
+</header>
+
+<main>
+  <section class="card" id="canvasCard">
+    <h2>Structure</h2>
+    <div id="sketchHost"></div>
+    <div class="tip" id="stereoTip">
+      <b>Stereocenters:</b> pick the wedge-bond tool, then click a bond to make it a
+      solid wedge. <b>Click the same bond again to turn it into a dashed (hashed) bond</b> —
+      the tool cycles wedge &rarr; dash &rarr; plain. A wedge and a dash on the same
+      drawing give opposite R/S assignments.
+    </div>
+    <div class="actions">
+      <button id="buildBtn" disabled>Build 3D structure</button>
+      <button id="clearBtn" class="ghost">Clear canvas</button>
+      <span class="sub" id="canvasStatus"></span>
+    </div>
+  </section>
+
+  <div class="stack">
+    <section class="card">
+      <h2>Output</h2>
+      <div class="row pathrow">
+        <div>
+          <label for="directory">Directory</label>
+          <input type="text" id="directory" spellcheck="false">
+        </div>
+        <div>
+          <label for="filename">Filename</label>
+          <input type="text" id="filename" spellcheck="false">
+        </div>
+      </div>
+      <div id="pathPreview">…</div>
+      <div class="checks">
+        <label><input type="checkbox" id="write_sdf" checked> also write .sdf sidecar</label>
+        <label><input type="checkbox" id="autoname" checked> auto-increment name after each build</label>
+      </div>
+      <div class="row two">
+        <div>
+          <label for="resname">PDB residue name</label>
+          <input type="text" id="resname" maxlength="3" placeholder="LIG">
+        </div>
+        <div>
+          <label for="threads">Threads</label>
+          <input type="number" id="threads" min="1" max="64" value="4">
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Minimization</h2>
+      <div class="row">
+        <div>
+          <label for="backend">Backend chain</label>
+          <select id="backend"></select>
+        </div>
+      </div>
+      <div class="hint" id="backendHint"></div>
+      <div class="row two">
+        <div>
+          <label for="solvent">Implicit solvent</label>
+          <select id="solvent">
+            <option value="">auto (water when charged)</option>
+            <option value="water">water</option>
+            <option value="none">none (gas phase)</option>
+          </select>
+        </div>
+        <div>
+          <label for="max_steps">Max optimizer steps</label>
+          <input type="number" id="max_steps" min="1" max="20000" value="500">
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Protonation</h2>
+      <div class="row two">
+        <div>
+          <label for="protonation">Mode</label>
+          <select id="protonation">
+            <option value="as-drawn">as drawn (no change)</option>
+            <option value="ph">assign at pH</option>
+            <option value="enumerate">enumerate all states at pH</option>
+          </select>
+        </div>
+        <div>
+          <label for="ph">pH</label>
+          <input type="number" id="ph" step="0.1" min="-2" max="16" value="7.4" disabled>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Conformers &amp; stereo</h2>
+      <div class="row two">
+        <div>
+          <label for="n_confs">Conformers to keep</label>
+          <input type="number" id="n_confs" min="1" max="2000" value="1">
+        </div>
+        <div>
+          <label for="conf_method">Search method</label>
+          <select id="conf_method">
+            <option value="rdkit">rdkit (ETKDG, seconds)</option>
+            <option value="crest">crest (metadynamics, minutes)</option>
+          </select>
+        </div>
+      </div>
+      <div class="row two">
+        <div>
+          <label for="energy_window">Energy window (kcal/mol)</label>
+          <input type="number" id="energy_window" step="0.5" min="0" placeholder="none">
+        </div>
+        <div>
+          <label for="stereo_mode">Undefined stereocenters</label>
+          <select id="stereo_mode">
+            <option value="require">refuse to guess</option>
+            <option value="any">let RDKit pick one</option>
+            <option value="enumerate">build every isomer</option>
+          </select>
+        </div>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="largest_fragment"> keep largest fragment only</label>
+        <label><input type="checkbox" id="allow_charge_mismatch"> allow charge mismatch</label>
+        <label><input type="checkbox" id="allow_proton_transfer"> allow proton transfer</label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Run log</h2>
+      <div id="log"><span class="line muted">nothing built yet.</span></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="confirmDialog">
+  <h2 style="margin:0 0 .2rem;font-size:1rem">Overwrite existing files?</h2>
+  <p class="sub" id="confirmBody">These files already exist and would be replaced:</p>
+  <ul id="confirmList"></ul>
+  <div class="actions">
+    <button id="confirmYes">Overwrite</button>
+    <button id="confirmNo" class="ghost">Cancel</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+
+const el = (id) => document.getElementById(id);
+const logBox = el("log");
+const buildBtn = el("buildBtn");
+
+let engineName = null;
+let jsmeApplet = null;
+let polling = null;
+let backends = [];
+
+/* ---------------------------------------------------------------- logging */
+let logStarted = false;
+function logLine(text, level = "info") {
+  if (!logStarted) { logBox.textContent = ""; logStarted = true; }
+  const span = document.createElement("span");
+  span.className = "line " + level;
+  span.textContent = text;
+  logBox.appendChild(span);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+function logRule(label) {
+  logLine("── " + label + " " + "─".repeat(Math.max(0, 46 - label.length)), "rule");
+}
+
+/* ------------------------------------------------------------ the editor */
+// One dispatcher for all three editors, so nothing has to be monkey-patched
+// once we know which one mounted.
+async function readMolblock() {
+  if (engineName === "jsme") {
+    if (!jsmeApplet) return "";
+    // smiles() is the cheapest way to ask "is the canvas empty?"
+    if (!jsmeApplet.smiles()) return "";
+    return jsmeApplet.molFile(false);
+  }
+  if (engineName === "ketcher") {
+    const frame = el("ketcherFrame");
+    const k = frame && frame.contentWindow && frame.contentWindow.ketcher;
+    if (!k) return "";
+    try { return await k.getMolfile(); } catch (e) { return ""; }
+  }
+  if (engineName === "paste") {
+    const box = el("pasteBox");
+    return box ? box.value : "";
+  }
+  return "";
+}
+
+async function readSmiles() {
+  if (engineName === "jsme" && jsmeApplet) {
+    try { return jsmeApplet.smiles(); } catch (e) { return ""; }
+  }
+  if (engineName === "ketcher") {
+    const frame = el("ketcherFrame");
+    const k = frame && frame.contentWindow && frame.contentWindow.ketcher;
+    if (k) { try { return await k.getSmiles(); } catch (e) { return ""; } }
+  }
+  return "";
+}
+
+function clearCanvas() {
+  if (engineName === "jsme" && jsmeApplet) jsmeApplet.reset();
+  if (engineName === "ketcher") {
+    const frame = el("ketcherFrame");
+    const k = frame && frame.contentWindow && frame.contentWindow.ketcher;
+    if (k) k.setMolecule("");
+  }
+  if (engineName === "paste") {
+    const box = el("pasteBox");
+    if (box) box.value = "";
+  }
+  el("canvasStatus").textContent = "";
+}
+
+// JSME calls this global when its bundle has booted.
+window.jsmeOnLoad = function () {
+  jsmeApplet = new JSApplet.JSME("sketchHost", "100%", "440px", {
+    options: "stereo,autoez,paste,multipart",
+  });
+  buildBtn.disabled = false;
+  el("canvasStatus").textContent = "editor ready";
+};
+
+/* ------------------------------------------------------------ path checks */
+let pathTimer = null;
+function schedulePathCheck() {
+  clearTimeout(pathTimer);
+  pathTimer = setTimeout(checkPath, 250);
+}
+
+async function checkPath() {
+  const body = {
+    directory: el("directory").value,
+    filename: el("filename").value,
+    write_sdf: el("write_sdf").checked,
+  };
+  const preview = el("pathPreview");
+  try {
+    const res = await fetch("/api/check-path", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const info = await res.json();
+    const bits = [];
+    bits.push(`will write ${info.pdb}`);
+    if (el("write_sdf").checked) bits.push(`         ${info.sdf}`);
+    if (info.error) bits.push(`<span class="err">${info.error}</span>`);
+    else if (info.will_create_directory)
+      bits.push(`<span class="warn">directory does not exist and will be created</span>`);
+    if (info.would_overwrite)
+      bits.push(`<span class="warn">already exists — you will be asked before it is replaced</span>`);
+    preview.innerHTML = bits.join("\n");
+    return info;
+  } catch (e) {
+    preview.innerHTML = `<span class="err">could not check the path: ${e.message}</span>`;
+    return null;
+  }
+}
+
+async function bumpFilename() {
+  if (!el("autoname").checked) return;
+  const dir = encodeURIComponent(el("directory").value);
+  try {
+    const res = await fetch(`/api/next-name?directory=${dir}&stem=sketch`);
+    const data = await res.json();
+    if (data.filename) el("filename").value = data.filename;
+  } catch (e) { /* leave the field alone */ }
+  checkPath();
+}
+
+/* ---------------------------------------------------------------- settings */
+function collectSettings() {
+  const solvent = el("solvent").value;
+  return {
+    directory: el("directory").value,
+    filename: el("filename").value,
+    write_sdf: el("write_sdf").checked,
+    resname: el("resname").value.trim() || null,
+    backend: el("backend").value,
+    solvent: solvent === "none" ? "" : solvent,
+    auto_solvent: solvent !== "none",
+    max_steps: Number(el("max_steps").value) || 500,
+    protonation: el("protonation").value,
+    ph: Number(el("ph").value),
+    n_confs: Number(el("n_confs").value) || 1,
+    conf_method: el("conf_method").value,
+    energy_window: el("energy_window").value === "" ? null : Number(el("energy_window").value),
+    stereo_mode: el("stereo_mode").value,
+    largest_fragment: el("largest_fragment").checked,
+    allow_charge_mismatch: el("allow_charge_mismatch").checked,
+    allow_proton_transfer: el("allow_proton_transfer").checked,
+    threads: Number(el("threads").value) || 1,
+  };
+}
+
+/* ------------------------------------------------------------------ build */
+async function build(overwrite = false) {
+  const molblock = await readMolblock();
+  if (!molblock || !molblock.trim()) {
+    el("canvasStatus").textContent = "draw something first";
+    logLine("nothing on the canvas.", "warn");
+    return;
+  }
+
+  buildBtn.disabled = true;
+  el("canvasStatus").textContent = "building…";
+
+  try {
+    const res = await fetch("/api/build", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ molblock, settings: collectSettings(), overwrite }),
+    });
+
+    if (res.status === 409) {
+      const data = await res.json();
+      buildBtn.disabled = false;
+      el("canvasStatus").textContent = "";
+      askOverwrite(data.target);
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      logLine(data.error || `server returned ${res.status}`, "error");
+      buildBtn.disabled = false;
+      el("canvasStatus").textContent = "";
+      return;
+    }
+    logRule(`build #${data.job_id}`);
+    pollJob(data.job_id);
+  } catch (e) {
+    logLine("could not reach the server: " + e.message, "error");
+    buildBtn.disabled = false;
+    el("canvasStatus").textContent = "";
+  }
+}
+
+function pollJob(jobId) {
+  let shown = 0;
+  clearInterval(polling);
+  polling = setInterval(async () => {
+    let job;
+    try {
+      job = await (await fetch(`/api/job/${jobId}`)).json();
+    } catch (e) { return; }
+
+    while (shown < job.log.length) {
+      const entry = job.log[shown++];
+      logLine(entry.text, entry.level);
+    }
+    if (job.state === "done" || job.state === "error") {
+      clearInterval(polling);
+      polling = null;
+      buildBtn.disabled = false;
+      if (job.state === "done") {
+        const n = job.result ? job.result.outputs.length : 0;
+        el("canvasStatus").textContent = `done — ${n} file(s) written`;
+        bumpFilename();
+      } else {
+        el("canvasStatus").textContent = "failed — see the run log";
+      }
+    }
+  }, 400);
+}
+
+/* -------------------------------------------------------- overwrite prompt */
+function askOverwrite(target) {
+  const dialog = el("confirmDialog");
+  el("confirmList").innerHTML = target.existing
+    .map((p) => `<li>${p}</li>`).join("");
+  dialog.showModal();
+}
+el("confirmYes").addEventListener("click", () => {
+  el("confirmDialog").close();
+  logLine("overwriting at your request", "warn");
+  build(true);
+});
+el("confirmNo").addEventListener("click", () => {
+  el("confirmDialog").close();
+  logLine("cancelled; change the filename and try again", "muted");
+});
+
+/* ------------------------------------------------------------------- setup */
+function describeBackend(id) {
+  const b = backends.find((x) => x.id === id.split(",").pop().trim());
+  if (!b) return "";
+  const bits = [b.description];
+  bits.push(b.takes_charge ? "consumes total charge" : "no charge channel");
+  if (b.supports_solvation) bits.push("implicit solvent available");
+  if (!b.ready) bits.push("UNAVAILABLE: " + b.reason);
+  return bits.join(" · ");
+}
+
+function populateBackends(cfg) {
+  backends = cfg.backends;
+  const select = el("backend");
+  const ready = backends.filter((b) => b.ready);
+  const chains = [
+    { value: "mmff94", label: "mmff94 — classical, milliseconds" },
+    { value: "uff", label: "uff — classical, broad elements" },
+  ];
+  for (const b of ready) {
+    if (b.id === "mmff94" || b.id === "uff") continue;
+    chains.push({ value: `mmff94,${b.id}`, label: `mmff94 → ${b.id} — ${b.kind}` });
+  }
+  const unavailable = backends.filter((b) => !b.ready);
+  select.innerHTML =
+    chains.map((c) => `<option value="${c.value}">${c.label}</option>`).join("") +
+    (unavailable.length
+      ? `<optgroup label="not available here">` +
+        unavailable.map((b) => `<option value="mmff94,${b.id}" disabled>${b.id} — ${b.reason}</option>`).join("") +
+        `</optgroup>`
+      : "");
+  select.value = cfg.defaults.backend || "mmff94";
+  el("backendHint").textContent = describeBackend(select.value);
+}
+
+function mountEngine(cfg) {
+  engineName = cfg.engine;
+  el("engineTag").textContent = cfg.engine ? `editor: ${cfg.engine}` : "no editor";
+  if (cfg.engine === "ketcher") {
+    el("sketchHost").innerHTML =
+      '<iframe id="ketcherFrame" src="/sketcher/index.html"></iframe>';
+    el("stereoTip").innerHTML =
+      "<b>Stereocenters:</b> use Ketcher's wedge and hash bond tools " +
+      "(the bond tool dropdown) to set configuration at a center.";
+    buildBtn.disabled = false;
+    el("canvasStatus").textContent = "editor ready";
+  } else if (cfg.engine === "jsme") {
+    const script = document.createElement("script");
+    script.src = "/sketcher/jsme/jsme.nocache.js";
+    document.head.appendChild(script);
+  } else {
+    el("sketchHost").innerHTML =
+      '<p class="sub">No editor could be fetched. Paste a molblock below.</p>' +
+      '<textarea id="pasteBox" style="width:100%;height:14rem;font-family:ui-monospace,monospace;font-size:.78rem"></textarea>';
+    engineName = "paste";
+    buildBtn.disabled = false;
+  }
+}
+
+async function init() {
+  let cfg;
+  try {
+    cfg = await (await fetch("/api/config")).json();
+  } catch (e) {
+    el("engineTag").textContent = "server unreachable";
+    return;
+  }
+  el("directory").value = cfg.defaults.directory || ".";
+  el("filename").value = cfg.defaults.filename || "sketch0.pdb";
+  if (cfg.defaults.threads) el("threads").value = cfg.defaults.threads;
+  populateBackends(cfg);
+  mountEngine(cfg);
+  checkPath();
+}
+
+el("backend").addEventListener("change", () => {
+  el("backendHint").textContent = describeBackend(el("backend").value);
+});
+el("protonation").addEventListener("change", (e) => {
+  el("ph").disabled = e.target.value === "as-drawn";
+});
+el("directory").addEventListener("input", schedulePathCheck);
+el("filename").addEventListener("input", schedulePathCheck);
+el("write_sdf").addEventListener("change", checkPath);
+buildBtn.addEventListener("click", () => build(false));
+el("clearBtn").addEventListener("click", clearCanvas);
+
+init();
+</script>
+</body>
+</html>
