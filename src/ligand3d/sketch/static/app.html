@@ -107,6 +107,11 @@
   }
   .checks input { margin: 0; }
   .note { color: var(--muted); font-size: .74rem; margin: -.3rem 0 .55rem; }
+  .pillbtn {
+    display: inline-block; cursor: pointer; font-family: ui-monospace, monospace;
+    font-size: .74rem; color: var(--fg);
+  }
+  .pillbtn:hover { color: var(--err); }
 
   #pathPreview {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -204,6 +209,8 @@
 <header>
   <h1>ligand3d</h1>
   <span class="tag" id="engineTag">loading…</span>
+  <a class="tag" href="/models" target="_blank" rel="noopener"
+     style="text-decoration:none">methods &amp; weights &rarr;</a>
   <span class="grow"></span>
   <span id="status"></span>
   <button class="ghost" id="clearBtn">Clear canvas</button>
@@ -295,6 +302,27 @@
             <select id="backend"></select>
           </div>
         </div>
+        <div class="checks">
+          <label><input type="checkbox" id="customChain"> build my own chain</label>
+        </div>
+        <div id="chainBuilder" hidden>
+          <div class="row" style="grid-template-columns:1fr auto">
+            <div>
+              <label for="chainPick">Add a method</label>
+              <select id="chainPick"></select>
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <button class="ghost" id="chainAdd" type="button"
+                      style="padding:.36rem .7rem;font-size:.8rem">Add</button>
+            </div>
+          </div>
+          <div id="chainList" class="note" style="margin:-.2rem 0 .5rem"></div>
+          <div class="note">
+            Runs left to right. The first method searches the conformers; the rest refine
+            only the survivors, so put the cheap one first.
+          </div>
+        </div>
         <div class="note" id="backendHint"></div>
         <div class="row two">
           <div>
@@ -310,7 +338,7 @@
           </div>
         </div>
         <div class="checks">
-          <label><input type="checkbox" id="trace"> log energy at every step (slower)</label>
+          <label><input type="checkbox" id="trace" checked> log energy at every step (slower)</label>
           <label><input type="checkbox" id="trajectory"> save the step-by-step geometry</label>
         </div>
         <div class="note">
@@ -658,6 +686,45 @@ async function bumpFilename() {
 }
 
 /* ------------------------------------------------------------- settings */
+let customChain = [];
+
+function chainValue() {
+  return el("customChain").checked && customChain.length
+    ? customChain.join(",")
+    : el("backend").value;
+}
+
+function renderChain() {
+  const box = el("chainList");
+  if (!customChain.length) {
+    box.innerHTML = '<span style="color:var(--warn)">no methods yet — add at least one</span>';
+  } else {
+    box.innerHTML = customChain.map((id, i) =>
+      '<span class="pillbtn" data-i="' + i + '" title="click to remove">' +
+      (i ? " &rarr; " : "") + id + " &times;</span>").join("");
+    Array.prototype.forEach.call(box.querySelectorAll(".pillbtn"), (b) => {
+      b.addEventListener("click", () => {
+        customChain.splice(Number(b.dataset.i), 1);
+        renderChain();
+      });
+    });
+  }
+  el("backendHint").textContent = describeBackend(chainValue());
+}
+
+el("customChain").addEventListener("change", (e) => {
+  el("chainBuilder").hidden = !e.target.checked;
+  el("backend").disabled = e.target.checked;
+  if (e.target.checked && !customChain.length) {
+    customChain = el("backend").value.split(",").map((x) => x.trim()).filter(Boolean);
+  }
+  renderChain();
+});
+el("chainAdd").addEventListener("click", () => {
+  const pick = el("chainPick").value;
+  if (pick) { customChain.push(pick); renderChain(); }
+});
+
 function collectSettings() {
   const solvent = el("solvent").value;
   return {
@@ -665,7 +732,7 @@ function collectSettings() {
     filename: el("filename").value,
     formats: chosenFormats(),
     resname: el("resname").value.trim() || null,
-    backend: el("backend").value,
+    backend: chainValue(),
     solvent: solvent === "none" ? "" : solvent,
     auto_solvent: solvent !== "none",
     max_steps: Number(el("max_steps").value) || 500,
@@ -840,7 +907,7 @@ function drawPlot(trace) {
              '" text-anchor="middle" class="axlabel">optimizer step (cumulative)</text>');
   parts.push('<text class="axlabel" transform="translate(13,' +
              ((PAD_T + H - PAD_B) / 2) + ') rotate(-90)" text-anchor="middle">' +
-             "\u0394E from each stage&#39;s start (kcal/mol)</text>");
+             "\u0394E (kcal/mol)</text>");
 
   // stage boundaries
   series.forEach((s, i) => {
@@ -947,6 +1014,15 @@ function populateBackends(cfg) {
   select.value = cfg.defaults.backend || "mmff94";
   if (!select.value) select.value = "mmff94";
   el("backendHint").textContent = describeBackend(select.value);
+
+  // the custom-chain picker lists every single method, ready ones first
+  const pick = el("chainPick");
+  const ready = backends.filter((b) => b.ready).map((b) =>
+    '<option value="' + b.id + '">' + b.id + " (" + b.kind + ")</option>");
+  const notReady = backends.filter((b) => !b.ready).map((b) =>
+    '<option value="' + b.id + '" disabled>' + b.id + " — " + b.reason + "</option>");
+  pick.innerHTML = '<optgroup label="available here">' + ready.join("") + "</optgroup>" +
+    (notReady.length ? '<optgroup label="not available">' + notReady.join("") + "</optgroup>" : "");
 }
 
 function populateSolvents(cfg) {

@@ -43,6 +43,8 @@ class Capabilities:
     wrong answer.
     """
     supports_solvation: bool = False
+    spin_aware: bool = False
+    """Consumes spin multiplicity as an input, not just total charge."""
     fixed_topology: bool = False
     """True if the method holds the bond list fixed and so cannot move a proton.
 

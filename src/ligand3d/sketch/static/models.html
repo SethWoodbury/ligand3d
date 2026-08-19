@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ligand3d — methods</title>
+<style>
+  :root {
+    --bg: #f4f6f8; --panel: #ffffff; --fg: #15181d; --muted: #5a6270;
+    --border: #dbdfe6; --line: #eaedf1; --accent: #2f6f4f; --accent-fg: #ffffff;
+    --ok: #1c7a4a; --warn: #93610f; --err: #b32f26; --soft: #f8f9fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a20; --fg: #e7eaef; --muted: #98a1ad;
+      --border: #292f38; --line: #22272f; --accent: #4c9a72; --accent-fg: #0a0c0f;
+      --ok: #55b784; --warn: #d6a03d; --err: #e46a5f; --soft: #12151a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  header {
+    display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
+    padding: .6rem .95rem; background: var(--panel);
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5;
+  }
+  h1 { font-size: .95rem; margin: 0; font-weight: 680; }
+  .grow { flex: 1; }
+  a.btn {
+    font-size: .8rem; font-weight: 620; text-decoration: none;
+    padding: .35rem .8rem; border-radius: 6px;
+    border: 1px solid var(--border); color: var(--fg);
+  }
+  a.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 1rem .95rem 3rem; }
+  .lede { color: var(--muted); font-size: .87rem; max-width: 60rem; margin: .3rem 0 1rem; }
+  .lede b { color: var(--fg); }
+
+  .controls { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .8rem; }
+  .controls input[type=text] {
+    font: inherit; font-size: .84rem; padding: .35rem .55rem; min-width: 14rem;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel); color: var(--fg);
+  }
+  .controls label {
+    display: flex; align-items: center; gap: .32rem;
+    font-size: .82rem; color: var(--muted); cursor: pointer;
+  }
+
+  .group { margin: 1.4rem 0 .5rem; }
+  .group h2 {
+    font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 .5rem; font-weight: 680;
+  }
+
+  table { width: 100%; border-collapse: collapse; background: var(--panel);
+          border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line);
+           font-size: .82rem; vertical-align: top; }
+  th { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--muted); font-weight: 680; background: var(--soft); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  tr.detail td { background: var(--soft); }
+  tbody tr.row { cursor: pointer; }
+  tbody tr.row:hover td { background: var(--soft); }
+
+  .id { font-family: ui-monospace, monospace; font-weight: 640; white-space: nowrap; }
+  .pill {
+    display: inline-block; font-size: .7rem; padding: .04rem .38rem; border-radius: 99px;
+    border: 1px solid var(--border); white-space: nowrap;
+  }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .pill.no { color: var(--muted); }
+  .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .num { text-align: right; white-space: nowrap; font-family: ui-monospace, monospace; }
+  .reason { color: var(--warn); font-size: .78rem; }
+  .dl { display: grid; grid-template-columns: 8.5rem 1fr; gap: .15rem .7rem; font-size: .8rem; }
+  .dl dt { color: var(--muted); }
+  .dl dd { margin: 0; word-break: break-word; }
+  .dl dd.path { font-family: ui-monospace, monospace; font-size: .76rem; }
+
+  .roots {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+    padding: .7rem .85rem; margin-top: 1.4rem; font-size: .83rem;
+  }
+  .roots code { font-size: .8rem; }
+  footer {
+    max-width: 1180px; margin: 0 auto; padding: 0 .95rem 2rem;
+    color: var(--muted); font-size: .76rem;
+  }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ligand3d — methods</h1>
+  <span class="grow"></span>
+  <a class="btn primary" href="/">back to the sketcher</a>
+</header>
+
+<main>
+  <p class="lede">
+    Every minimization method ligand3d knows about, what it costs, and whether it can run
+    on this machine right now. The column that matters most is <b>charge</b>:
+    <em>explicit</em> means the method consumes the total molecular charge as an input;
+    <em>implicit</em> means it sees only atoms and positions, so a carboxylate and a
+    neutral acid that lost a proton look identical to it. ligand3d refuses the second
+    pairing rather than answering it. Click any row for detail.
+  </p>
+
+  <div class="controls">
+    <input type="text" id="filter" placeholder="filter by name, family, or note…" spellcheck="false">
+    <label><input type="checkbox" id="onlyReady"> only what runs here</label>
+    <label><input type="checkbox" id="onlyCharge"> only charge-aware</label>
+    <span class="grow"></span>
+    <span id="count" style="font-size:.8rem;color:var(--muted)"></span>
+  </div>
+
+  <div id="groups"></div>
+
+  <div class="roots" id="roots"></div>
+</main>
+
+<footer>
+  <p>
+    <strong>ligand3d</strong> — by
+    <a href="https://github.com/SethWoodbury" target="_blank" rel="noopener">Seth M. Woodbury</a>
+    ·
+    <a href="https://github.com/SethWoodbury/ligand3d" target="_blank" rel="noopener">github.com/SethWoodbury/ligand3d</a>
+  </p>
+  <p>
+    Speeds are wall time for a ~30-atom molecule on CPU, measured on this machine, and are
+    a rough guide rather than a benchmark. Memory is peak resident during a single
+    minimization.
+  </p>
+</footer>
+
+<script>
+"use strict";
+const el = (id) => document.getElementById(id);
+let DATA = null;
+
+const GROUPS = [
+  ["ff", "Force fields"],
+  ["semiempirical", "Semi-empirical"],
+  ["mlff", "Machine-learned potentials"],
+];
+
+function pill(text, cls) { return '<span class="pill ' + cls + '">' + text + "</span>"; }
+
+function chargePill(v) {
+  if (v === "explicit") return pill("explicit", "ok");
+  return pill(v, "no");
+}
+
+function statusPill(m) {
+  return m.ready ? pill("ready", "ok") : pill("unavailable", "warn");
+}
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function detailRow(m) {
+  const rows = [];
+  const add = (k, v, cls) => { if (v) rows.push("<dt>" + k + "</dt><dd" +
+    (cls ? ' class="' + cls + '"' : "") + ">" + esc(v) + "</dd>"); };
+  add("description", m.description);
+  add("trained on", m.training);
+  add("accuracy", m.accuracy);
+  add("elements", m.elements);
+  add("notes", m.notes);
+  add("upstream", m.repo);
+  add("weights file", m.weights_file, "path");
+  add("resolved path", m.weights_path || (m.weights_file ? "not found on this machine" : ""), "path");
+  if (m.weights_mb) add("weights size", m.weights_mb + " MB");
+  if (m.aliases && m.aliases.length) add("aliases", m.aliases.join(", "));
+  if (m.requires && m.requires.length) add("needs modules", m.requires.join(", "));
+  if (!m.ready) {
+    add("unavailable", m.reason);
+    add("to enable", m.hint);
+  }
+  return '<tr class="detail" data-for="' + m.id + '" hidden><td colspan="8">' +
+    '<dl class="dl">' + rows.join("") + "</dl></td></tr>";
+}
+
+function render() {
+  if (!DATA) return;
+  const q = el("filter").value.trim().toLowerCase();
+  const readyOnly = el("onlyReady").checked;
+  const chargeOnly = el("onlyCharge").checked;
+
+  const matches = DATA.methods.filter((m) => {
+    if (readyOnly && !m.ready) return false;
+    if (chargeOnly && m.charge !== "explicit") return false;
+    if (!q) return true;
+    return [m.id, m.family, m.description, m.notes, m.training, m.repo, m.accuracy]
+      .join(" ").toLowerCase().includes(q);
+  });
+
+  const out = [];
+  for (const [kind, title] of GROUPS) {
+    const rows = matches.filter((m) => m.kind === kind);
+    if (!rows.length) continue;
+    out.push('<div class="group"><h2>' + title + " (" + rows.length + ")</h2><table><thead><tr>" +
+      "<th>id</th><th>family</th><th>charge</th><th>spin</th><th>solvent</th>" +
+      '<th class="num">speed</th><th class="num">memory</th><th>status</th>' +
+      "</tr></thead><tbody>");
+    for (const m of rows) {
+      out.push('<tr class="row" data-id="' + m.id + '">' +
+        '<td class="id">' + esc(m.id) + "</td>" +
+        "<td>" + esc(m.family) + "</td>" +
+        "<td>" + chargePill(m.charge) + "</td>" +
+        "<td>" + (m.spin === "yes" ? pill("yes", "ok") : pill("no", "no")) + "</td>" +
+        "<td>" + (m.solvent !== "no" ? pill(m.solvent, "ok") : pill("no", "no")) + "</td>" +
+        '<td class="num">' + esc(m.speed) + "</td>" +
+        '<td class="num">' + esc(m.memory) + "</td>" +
+        "<td>" + statusPill(m) +
+          (m.ready ? "" : '<div class="reason">' + esc(m.reason) + "</div>") + "</td>" +
+        "</tr>");
+      out.push(detailRow(m));
+    }
+    out.push("</tbody></table></div>");
+  }
+  el("groups").innerHTML = out.join("") ||
+    '<p style="color:var(--muted)">nothing matches that filter.</p>';
+  el("count").textContent = matches.length + " of " + DATA.methods.length + " shown · " +
+    DATA.methods.filter((m) => m.ready).length + " ready";
+
+  Array.prototype.forEach.call(document.querySelectorAll("tr.row"), (row) => {
+    row.addEventListener("click", () => {
+      const d = document.querySelector('tr.detail[data-for="' + row.dataset.id + '"]');
+      if (d) d.hidden = !d.hidden;
+    });
+  });
+
+  const roots = [];
+  if (DATA.weight_roots && DATA.weight_roots.length) {
+    roots.push("<strong>Checkpoints are read from</strong><br>" +
+      DATA.weight_roots.map((r) => "<code>" + esc(r) + "</code>").join("<br>") +
+      '<br><span style="color:var(--muted)">Override any of them with ' +
+      "<code>LIGAND3D_&lt;MODEL&gt;</code> or a <code>[weights]</code> entry in " +
+      "<code>~/.config/ligand3d/config.toml</code>.</span>");
+  }
+  const unsupported = Object.entries(DATA.unsupported || {});
+  if (unsupported.length) {
+    roots.push('<div style="margin-top:.7rem"><strong>Present but not loadable</strong><br>' +
+      unsupported.map(([k, v]) =>
+        "<code>" + esc(k) + "</code> — " + esc(v)).join("<br>") + "</div>");
+  }
+  el("roots").innerHTML = roots.join("");
+}
+
+el("filter").addEventListener("input", render);
+el("onlyReady").addEventListener("change", render);
+el("onlyCharge").addEventListener("change", render);
+
+(async function init() {
+  try {
+    DATA = await (await fetch("/api/models")).json();
+  } catch (e) {
+    el("groups").innerHTML = '<p style="color:var(--err)">could not load the catalog: ' +
+      esc(e.message) + "</p>";
+    return;
+  }
+  render();
+})();
+</script>
+</body>
+</html>

@@ -514,6 +514,85 @@ def sketch(
 
 
 @app.command()
+def models(
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Include training data, notes, and weight paths."
+    ),
+    available_only: bool = typer.Option(
+        False, "--available", help="Only methods that can run here."
+    ),
+) -> None:
+    """Describe every minimization method: cost, capabilities, and weights."""
+    from .catalog import summarize
+
+    report = summarize()
+    methods = [m for m in report.methods if m.ready or not available_only]
+
+    table = Table(title="ligand3d methods", header_style="bold", expand=True)
+    table.add_column("id", no_wrap=True)
+    table.add_column("family", no_wrap=True)
+    table.add_column("charge", justify="center", no_wrap=True)
+    table.add_column("spin", justify="center", no_wrap=True)
+    table.add_column("solv", justify="center", no_wrap=True)
+    table.add_column("speed", justify="right", no_wrap=True)
+    table.add_column("memory", justify="right", no_wrap=True)
+    table.add_column("status", overflow="fold")
+
+    for method in methods:
+        # escape() goes around the *reason*, which is arbitrary text that may
+        # contain brackets; the colour tags around it are ours and must survive.
+        status = (
+            "[green]ready[/green]" if method.ready
+            else f"[yellow]{escape(method.reason)}[/yellow]"
+        )
+        charge = (
+            "[green]explicit[/green]" if method.charge == "explicit"
+            else f"[dim]{method.charge}[/dim]"
+        )
+        table.add_row(
+            method.id, method.family, charge,
+            method.spin, method.solvent, method.speed, method.memory, status,
+        )
+    console.print(table)
+    console.print(
+        "\n[dim]charge: explicit = the model consumes total charge; implicit = it only "
+        "sees atoms and positions, so it cannot tell a carboxylate from a neutral acid "
+        "that lost a proton.[/dim]"
+    )
+    console.print(
+        f"[dim]speed is wall time for a ~30-atom molecule on CPU, measured here.[/dim]"
+    )
+
+    if verbose:
+        for method in methods:
+            console.print(f"\n[bold]{method.id}[/bold]  {method.description}")
+            for label, value in (
+                ("family", method.family),
+                ("trained on", method.training),
+                ("accuracy", method.accuracy),
+                ("elements", method.elements),
+                ("notes", method.notes),
+                ("upstream", method.repo),
+                ("weights", method.weights_file),
+                ("resolved", method.weights_path or "not found"),
+                ("aliases", ", ".join(method.aliases)),
+            ):
+                if value:
+                    console.print(f"    {label:12s} {escape(str(value))}")
+            if not method.ready and method.hint:
+                console.print(f"    [dim]{escape(method.hint)}[/dim]")
+
+    if report.weight_roots:
+        console.print("\n[bold]weights read from[/bold]")
+        for root in report.weight_roots:
+            console.print(f"  {root}")
+    if report.unsupported:
+        console.print("\n[bold]known but not loadable[/bold]")
+        for key, why in report.unsupported.items():
+            console.print(f"  [yellow]-[/yellow] {key}: [dim]{escape(why)}[/dim]")
+
+
+@app.command()
 def solvents() -> None:
     """List the implicit solvents ALPB is parameterized for."""
     from .solvents import NOT_PARAMETERIZED, SOLVENTS

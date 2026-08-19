@@ -110,6 +110,7 @@ class _WeightsBackend(ASEBackend):
             kind=kind,
             description=spec.description,
             takes_charge=spec.takes_charge,
+            spin_aware=spec.spin_aware,
             supports_solvation=False,
             elements=ORGANIC_ELEMENTS if spec.organic_only else None,
             requires=requires,
@@ -178,6 +179,47 @@ class MACEBackend(_WeightsBackend):
         if self.spec.takes_charge:
             atoms.info["charge"] = int(job.charge)
             atoms.info["spin"] = int(job.multiplicity)
+
+
+class MACEPolarBackend(MACEBackend):
+    """MACE-POLAR, which needs a patched MACE fork rather than stock mace-torch.
+
+    The fork installs *as* mace-torch, so it replaces the stock package outright
+    — a third environment alongside the mace/fairchem split rather than
+    something that can sit beside either. Verified working here: all three sizes
+    load and evaluate once `graph_longrange` and the fork are installed.
+    """
+
+    def install_hint(self) -> str:
+        return (
+            "MACE-POLAR replaces stock mace-torch, so use a separate venv:\n"
+            "  pip install torch --index-url https://download.pytorch.org/whl/cpu\n"
+            "  pip install <mace-polar fork source> <graph_longrange source>\n"
+            "On this cluster both live under "
+            "quantum_cowboy_biochemistry/deps/{mace_polar_src,graph_longrange_src}."
+        )
+
+    def extra_availability(self) -> Availability | None:
+        import importlib.util
+
+        if importlib.util.find_spec("graph_longrange") is None:
+            return Availability(
+                ok=False,
+                reason="graph_longrange is not installed",
+                hint=self.install_hint(),
+            )
+        try:
+            from mace.modules import extensions  # noqa: F401
+
+            if not hasattr(extensions, "PolarMACE"):
+                raise ImportError("PolarMACE missing")
+        except Exception:
+            return Availability(
+                ok=False,
+                reason="the installed mace has no PolarMACE (stock mace-torch, not the fork)",
+                hint=self.install_hint(),
+            )
+        return _WeightsBackend.extra_availability(self)
 
 
 class FairChemBackend(_WeightsBackend):
@@ -264,12 +306,17 @@ def _register_from_config() -> None:
     """Register one backend per checkpoint described in config.MODELS."""
     from ..config import MODELS
 
-    families = {"mace": MACEBackend, "fairchem": FairChemBackend}
+    families = {
+        "mace": MACEBackend,
+        "mace-polar": MACEPolarBackend,
+        "fairchem": FairChemBackend,
+    }
     aliases = {
         "mace-off": ("mace-off23", "maceoff"),
         "mace-mp": ("macemp",),
         "esen": ("esen-sm", "esen-sm-conserving"),
         "uma-s": ("uma",),
+        "mace-polar": ("mace-polar-m", "macepolar"),
     }
     for spec in MODELS:
         factory = families.get(spec.family)

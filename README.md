@@ -84,8 +84,27 @@ Chain them with a comma — cheap first, expensive last:
 ligand3d build "NCC1(CC(=O)O)CCCCC1" --backend mmff94,gfn2
 ```
 
-`ligand3d backends` lists what is registered; `ligand3d doctor` says which ones can
-actually run here and what to install for the rest.
+`ligand3d models` is the full reference — cost, memory, charge and spin handling,
+training data, element coverage, and the resolved path of every checkpoint:
+
+```bash
+ligand3d models              # the table
+ligand3d models --available  # only what runs here
+ligand3d models -v           # plus training data, notes, and weight paths
+```
+
+The browser has the same thing at `/models`, filterable, linked from the header.
+`ligand3d backends` is the short version; `ligand3d doctor` diagnoses what is missing.
+
+Chains are not limited to the presets. Any comma-separated sequence works, on the command
+line or via **build my own chain** in the browser:
+
+```bash
+ligand3d build "<smiles>" --backend mmff94,mace-mh,mace-off-large
+```
+
+The first method searches the conformers and the rest refine only the survivors, so put
+the cheap one first.
 
 ## Implicit solvent
 
@@ -121,7 +140,9 @@ which is why they are the wrong tool for a zwitterion regardless of charge handl
 ## Machine-learned force fields
 
 **On this cluster the checkpoints live in `/net/databases/huggingface/mlFF_models/`, and
-ligand3d finds them there automatically.** That path is one of the built-in probe
+ligand3d finds them there automatically** — for example `mace-polar` resolves to
+`models--ACEsuit--mace-polar-1-beta/MACE-POLAR-1-M.model`. `ligand3d models -v` prints the
+resolved path for every model so there is no guessing about which file is being loaded. That path is one of the built-in probe
 locations, so nothing needs configuring — `ligand3d doctor` prints exactly which file it
 resolved for each model. On any other machine, point `LIGAND3D_<MODEL>` at a checkpoint
 or list it under `[weights]` in `~/.config/ligand3d/config.toml`.
@@ -174,17 +195,33 @@ uv pip install -e ".[xtb,protonation,fairchem]"  # eSEN / UMA / AllScAIP + xTB
 
 Install torch from the CPU index first in both unless you have a GPU.
 
-### Present on the cluster but not usable
+### MACE-POLAR — a third environment
 
-- **MACE-POLAR-1** (S/M/L, 191 MB) needs the `graph_longrange` package and a patched
-  MACE fork (`mace.modules.extensions.PolarMACE`), neither of which is on PyPI.
+MACE-POLAR-1 (S/M/L) models long-range electrostatics that the other MACE models leave
+out, and it does work — all three sizes load and evaluate. It needs two things that are
+not on PyPI: `graph_longrange`, and a **patched MACE fork** that installs *as*
+`mace-torch` and therefore replaces the stock package. So it is a third mutually
+exclusive environment, not something that sits beside `[mace]`.
+
+On this cluster both sources are in `quantum_cowboy_biochemistry/deps/`:
+
+```bash
+uv venv --python 3.12 .venv-polar && source .venv-polar/bin/activate
+uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+uv pip install <repo>/deps/mace_polar_src <repo>/deps/graph_longrange_src
+uv pip install -e /path/to/ligand3d
+ligand3d build "<smiles>" --backend mmff94,mace-polar
+```
+
+### Still not usable
+
 - **SO3LR v2 beta** is a JAX model needing jax, orbax, and `so3lr`; every ligand3d
   backend is torch or ASE based.
 - **orb-mol-conservative** (99 MB) loads, but `orb-models` 0.7 removed
   `orb_models.forcefield.calculator`, so there is no ASE calculator to attach.
 
-`ligand3d doctor` lists these with the same explanation rather than pretending they
-aren't there.
+`ligand3d doctor` and `ligand3d models` list these with the same explanation rather than
+pretending they aren't there.
 
 ## Protonation
 

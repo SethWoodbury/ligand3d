@@ -52,6 +52,7 @@ _MAX_BODY = 8 * 1024 * 1024
 
 
 APP_PAGE = _STATIC / "app.html"
+MODELS_PAGE = _STATIC / "models.html"
 """The only page. It handles the no-editor case itself with a paste box, so the
 settings panel and the run log are available even when JSME cannot be fetched."""
 
@@ -166,6 +167,16 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             self._send(200, APP_PAGE.read_bytes(), "text/html; charset=utf-8")
+            return
+
+        if path in ("/models", "/models.html"):
+            self._send(200, MODELS_PAGE.read_bytes(), "text/html; charset=utf-8")
+            return
+
+        if path == "/api/models":
+            from ..catalog import summarize
+
+            self._json(summarize().to_json())
             return
 
         if path == "/api/config":
