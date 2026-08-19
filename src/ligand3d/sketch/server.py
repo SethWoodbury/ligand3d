@@ -141,6 +141,18 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.done.set()
 
 
+class _Server(socketserver.TCPServer):
+    """TCP server that can rebind a port still in TIME_WAIT.
+
+    `allow_reuse_address` has to be a class attribute: TCPServer binds inside
+    __init__, so setting it on the instance afterwards is too late and a second
+    `ligand3d sketch` on the same port fails with EADDRINUSE.
+    """
+
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -174,11 +186,13 @@ def sketch_molecule(
     )
 
     try:
-        server = socketserver.TCPServer(("127.0.0.1", port), handler)
+        server = _Server(("127.0.0.1", port), handler)
     except OSError as exc:
-        raise Ligand3DError(f"could not bind port {port}: {exc}") from exc
+        raise Ligand3DError(
+            f"could not bind port {port}: {exc}. "
+            "Pass --port to choose another, or omit it to have one picked."
+        ) from exc
 
-    server.allow_reuse_address = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
