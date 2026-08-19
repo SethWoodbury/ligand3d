@@ -229,8 +229,7 @@ def run_job(
 
     job.state = "running"
     try:
-        job.say(f"reading the drawn structure ({len(molblock.splitlines())} molblock lines)")
-        molecule = from_molblock(molblock)
+        molecule = _read_structure(molblock, job)
         job.say(f"formula {molecule.formula}, SMILES {molecule.smiles}")
 
         n_frags = molecule.n_fragments
@@ -298,6 +297,19 @@ def run_job(
         job.say(traceback.format_exc().strip().splitlines()[-1], "error")
         job.error = f"{type(exc).__name__}: {exc}"
         job.state = "error"
+
+
+def _read_structure(text: str, job: Job):
+    """Read a molblock, or a bare SMILES string from the paste-box fallback."""
+    from ..molecule import from_molblock, from_smiles
+
+    stripped = text.strip()
+    # A molblock always has a counts line, so it is never a single short line.
+    if "\n" not in stripped and len(stripped) < 400:
+        job.say(f"reading the pasted SMILES {stripped}")
+        return from_smiles(stripped)
+    job.say(f"reading the drawn structure ({len(text.splitlines())} molblock lines)")
+    return from_molblock(text)
 
 
 def _settings_from_json(data: dict[str, Any]):

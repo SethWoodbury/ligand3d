@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .server import Engine, choose_engine, ensure_jsme, ketcher_is_available, serve
+from .server import Engine, choose_engine, ensure_jsme, serve
 from .session import (
     Job,
     JobStore,
@@ -22,7 +22,6 @@ __all__ = [
     "choose_engine",
     "ensure_jsme",
     "inspect_target",
-    "ketcher_is_available",
     "next_filename",
     "run_job",
     "serve",

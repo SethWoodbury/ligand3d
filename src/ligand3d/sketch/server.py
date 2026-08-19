@@ -5,15 +5,10 @@ a 2D editor, the build settings, and a run log. You draw, build, read what
 happened, clear the canvas, and draw the next one — the server stays up until
 you stop it, so nothing needs reloading between molecules.
 
-Two engines, tried in order:
-
-- **JSME** — the default. One 1 MB zip containing a single `jsme.nocache.js`
-  loader that runs entirely in the browser. Fetched on first use, offline after.
-- **Ketcher** — nicer to use, but EPAM ships it as an npm library rather than a
-  servable page: `ketcher-standalone.zip` contains `index.js`, `main.js`, and
-  type declarations, and no HTML at all, so it cannot simply be unzipped and
-  served. Point `LIGAND3D_KETCHER_DIR` at a directory containing a built
-  `index.html` and it is used in preference to JSME.
+The editor is [JSME](https://jsme-editor.github.io/): a 1 MB zip whose single
+`jsme.nocache.js` loader runs entirely in the browser, fetched on first use and
+offline thereafter. If it cannot be fetched the page falls back to a box that
+accepts a pasted SMILES or molblock, so the command still works offline.
 
 Everything is bound to 127.0.0.1 and nothing leaves the machine.
 """
@@ -55,17 +50,17 @@ _STATIC = _HERE / "static"
 _MAX_BODY = 8 * 1024 * 1024
 
 
+APP_PAGE = _STATIC / "app.html"
+"""The only page. It handles the no-editor case itself with a paste box, so the
+settings panel and the run log are available even when JSME cannot be fetched."""
+
+
 @dataclass(frozen=True)
 class Engine:
-    """A sketcher that can be served from disk."""
+    """A sketcher whose assets are served from `root`."""
 
     name: str
     root: Path
-    page: str
-
-    @property
-    def bridge(self) -> Path:
-        return _STATIC / self.page
 
 
 def _extract(payload: bytes, target: Path, strip_prefix: str | None = None) -> None:
@@ -119,25 +114,12 @@ def ensure_jsme(quiet: bool = False) -> Path | None:
     return target if (target / "jsme" / "jsme.nocache.js").exists() else None
 
 
-def ketcher_is_available() -> bool:
-    from ..config import ketcher_dir
-
-    return (ketcher_dir() / "index.html").exists()
-
-
 def choose_engine(quiet: bool = False) -> Engine | None:
-    """Pick the best sketcher available, fetching JSME if need be."""
-    from ..config import ketcher_dir
-
-    ketcher = ketcher_dir()
-    if (ketcher / "index.html").exists():
-        return Engine(name="ketcher", root=ketcher, page="app.html")
-
+    """Return the JSME engine, fetching it if need be, or None to fall back."""
     jsme = ensure_jsme(quiet=quiet)
-    if jsme is not None:
-        return Engine(name="jsme", root=jsme, page="app.html")
-
-    return None
+    if jsme is None:
+        return None
+    return Engine(name="jsme", root=jsme)
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
@@ -182,8 +164,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
         if path in ("/", "/index.html"):
-            page = self.engine.bridge if self.engine else _STATIC / "fallback.html"
-            self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+            self._send(200, APP_PAGE.read_bytes(), "text/html; charset=utf-8")
             return
 
         if path == "/api/config":

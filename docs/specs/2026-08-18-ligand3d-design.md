@@ -162,7 +162,7 @@ the repo. `config.py` resolves each resource in order:
 5. upstream download into `~/.cache/ligand3d/`
 
 `ligand3d doctor` prints what was found, what was not, and why — so a failure is
-diagnosable without reading source. The same mechanism finds the Ketcher bundle.
+diagnosable without reading source. The same mechanism finds the JSME bundle.
 
 ## Sketcher
 
@@ -183,12 +183,8 @@ The default is therefore **JSME**, which genuinely is a drop-in: a 1 MB zip whos
 `~/.cache/ligand3d/jsme/` and works offline thereafter, and it handles wedge and hash
 bonds, so drawn stereocentres arrive as real stereochemistry.
 
-Ketcher remains supported for anyone who builds it: set `LIGAND3D_KETCHER_DIR` to a
-directory containing `index.html` and it is preferred over JSME. The `vendor/ketcher`
-submodule pins the upstream source for that purpose; a normal clone does not fetch it.
-
-If neither engine is available the page degrades to a paste box accepting SMILES or a
-molblock.
+If JSME cannot be fetched the page degrades to a paste box accepting SMILES or a
+molblock. (Ketcher was later removed outright — see the addendum.)
 
 One trap worth recording: the molblock must be returned to the pipeline **verbatim**.
 Its first line is the molecule-name field and is routinely empty, so calling `.strip()`
@@ -229,7 +225,6 @@ ligand3d/
 ├── pyproject.toml
 ├── README.md
 ├── LICENSE                       # MIT
-├── .gitmodules                   # vendor/ketcher
 ├── docs/specs/
 ├── src/ligand3d/
 │   ├── cli.py                    # build, sketch, doctor, backends
@@ -348,3 +343,33 @@ plain on repeated clicks. The page says so inline, because it is not discoverabl
 
 The JSME options string was also wrong: it passed `oldlook,star,newlook`, which asks for
 the old and new look simultaneously. It is now `stereo,autoez,paste,multipart`.
+
+
+## Ketcher removed, 2026-08-19
+
+Ketcher was kept for a while as an opt-in second editor behind
+`LIGAND3D_KETCHER_DIR`, with the upstream source pinned as a submodule. All of it
+is gone now. The reasoning, since this reverses an earlier decision:
+
+- The submodule reached **786 MB** on disk and contributed nothing at runtime. Its
+  stated purpose was provenance and the option to build from source, but nothing in
+  the project ever built from it, and anyone who wanted to build Ketcher would clone
+  it from upstream themselves. Pinning a commit we had never built was ceremony.
+- **Nothing tested the Ketcher path.** The one test covering it was lost when the
+  sketcher was rewritten as a session, leaving an untested branch that claimed to
+  work. An untested escape hatch is worse than no hatch: pointing the environment
+  variable at a build and having it fail is a worse experience than the capability
+  simply not being offered.
+- It could not be exercised honestly in the first place, because using it requires an
+  npm build that was never run here. Every claim about it was theoretical.
+- JSME does the job in 1 MB and is verified end to end.
+
+Removing it also turned up two things the audit would otherwise have missed:
+`bridge_jsme.html` and `bridge_ketcher.html` had become orphans when the UI unified
+on `app.html`, and `fallback.html` was **broken** — it still POSTed to `/submit`, an
+endpoint that stopped existing when the server became a session. `app.html` already
+handled the no-editor case with a paste box, so the fallback page was both dead and
+redundant; there is now exactly one page.
+
+If Ketcher is ever wanted, it should be added as a real feature with a real build to
+test against, not restored as a stub.

@@ -15,10 +15,6 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-        # The Ketcher submodule is ~380 MB and nothing in the test suite needs
-        # it, so CI checks out the superproject only.
-        with:
-          submodules: false
 
       - uses: astral-sh/setup-uv@v5
 
@@ -41,8 +37,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: false
       - uses: astral-sh/setup-uv@v5
       - run: uv venv --python 3.12
       - run: uv pip install -e ".[dev]"

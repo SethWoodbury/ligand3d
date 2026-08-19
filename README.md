@@ -220,22 +220,21 @@ Whatever you draw is checked: after embedding and again after minimization the C
 are re-perceived from the 3D coordinates and compared against your drawing, so a
 stereocenter cannot silently flip.
 
-### Editors
+### The editor
 
-The default is [JSME](https://jsme-editor.github.io/), fetched once (about 1 MB) into
-`~/.cache/ligand3d/` and offline thereafter. Nothing is sent anywhere: the server binds
-`127.0.0.1` only.
+[JSME](https://jsme-editor.github.io/) is fetched once (about 1 MB) into
+`~/.cache/ligand3d/` and works offline thereafter. Nothing is sent anywhere: the server
+binds `127.0.0.1` only, and it shuts down when you stop it.
 
-[Ketcher](https://github.com/epam/ketcher) is a nicer editor and is supported, but EPAM
-publishes it as an npm library rather than a servable page — `ketcher-standalone.zip`
-contains `index.js`, `main.js`, and type declarations, and no HTML at all — so it cannot
-be fetched and used automatically. Build it yourself, point `LIGAND3D_KETCHER_DIR` at the
-directory holding the resulting `index.html`, and it is used in preference to JSME. The
-pinned upstream source is the `vendor/ketcher` submodule, which a normal clone does not
-download.
+If it cannot be fetched the same page shows a paste box instead, accepting a molblock or a
+SMILES string. Every other control — settings, run log, overwrite protection — works
+unchanged, so an air-gapped machine loses only the drawing canvas.
 
-If neither can be reached the page degrades to a paste box accepting SMILES or a
-molblock, so the command still works on an air-gapped machine.
+[Ketcher](https://github.com/epam/ketcher) was evaluated and deliberately not used. EPAM
+publishes it as an npm library rather than a servable page: `ketcher-standalone.zip`
+contains `index.js`, `main.js`, and type declarations, and no HTML file anywhere, so it
+cannot be unzipped and served. Supporting it would mean requiring a node toolchain to
+build an editor that JSME already provides in 1 MB.
 
 ## Configuration
 

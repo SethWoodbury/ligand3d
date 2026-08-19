@@ -330,22 +330,6 @@ def jsme_dir() -> Path:
     return CACHE_DIR / "jsme"
 
 
-def ketcher_dir() -> Path:
-    """Where a built Ketcher lives, if the user supplied one.
-
-    Nothing downloads into here. EPAM publishes Ketcher as an npm library, not
-    as a servable page, so using it means building it yourself and pointing
-    LIGAND3D_KETCHER_DIR at the directory holding the resulting index.html.
-    """
-    env = os.environ.get(_env_key("ketcher_dir"))
-    if env:
-        return Path(env).expanduser()
-    cfg = load_config().get("sketch", {})
-    if "ketcher_dir" in cfg:
-        return Path(str(cfg["ketcher_dir"])).expanduser()
-    return CACHE_DIR / "ketcher"
-
-
 def write_default_config(path: Path | None = None) -> Path:
     """Write a commented starter config the user can edit."""
     target = path or CONFIG_PATH
@@ -369,8 +353,7 @@ def write_default_config(path: Path | None = None) -> Path:
 # xtb_lib = "/path/to/env/lib"   # extra LD_LIBRARY_PATH for a conda-built xtb
 
 [sketch]
-# jsme_dir    = "/path/to/JSME"                  # auto-downloaded if absent
-# ketcher_dir = "/path/to/built/ketcher"         # must contain index.html
+# jsme_dir = "/path/to/JSME"   # auto-downloaded if absent
 """
     )
     return target

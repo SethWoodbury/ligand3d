@@ -58,7 +58,6 @@
 
   #canvasCard { display: flex; flex-direction: column; gap: .7rem; }
   #sketchHost { min-height: 420px; }
-  #ketcherFrame { width: 100%; height: 460px; border: 1px solid var(--border); border-radius: 6px; }
   .tip {
     color: var(--muted); font-size: .8rem; background: var(--logbg);
     border: 1px solid var(--border); border-radius: 6px; padding: .5rem .65rem;
@@ -317,12 +316,6 @@ async function readMolblock() {
     if (!jsmeApplet.smiles()) return "";
     return jsmeApplet.molFile(false);
   }
-  if (engineName === "ketcher") {
-    const frame = el("ketcherFrame");
-    const k = frame && frame.contentWindow && frame.contentWindow.ketcher;
-    if (!k) return "";
-    try { return await k.getMolfile(); } catch (e) { return ""; }
-  }
   if (engineName === "paste") {
     const box = el("pasteBox");
     return box ? box.value : "";
@@ -330,25 +323,9 @@ async function readMolblock() {
   return "";
 }
 
-async function readSmiles() {
-  if (engineName === "jsme" && jsmeApplet) {
-    try { return jsmeApplet.smiles(); } catch (e) { return ""; }
-  }
-  if (engineName === "ketcher") {
-    const frame = el("ketcherFrame");
-    const k = frame && frame.contentWindow && frame.contentWindow.ketcher;
-    if (k) { try { return await k.getSmiles(); } catch (e) { return ""; } }
-  }
-  return "";
-}
 
 function clearCanvas() {
   if (engineName === "jsme" && jsmeApplet) jsmeApplet.reset();
-  if (engineName === "ketcher") {
-    const frame = el("ketcherFrame");
-    const k = frame && frame.contentWindow && frame.contentWindow.ketcher;
-    if (k) k.setMolecule("");
-  }
   if (engineName === "paste") {
     const box = el("pasteBox");
     if (box) box.value = "";
@@ -563,22 +540,22 @@ function populateBackends(cfg) {
 function mountEngine(cfg) {
   engineName = cfg.engine;
   el("engineTag").textContent = cfg.engine ? `editor: ${cfg.engine}` : "no editor";
-  if (cfg.engine === "ketcher") {
-    el("sketchHost").innerHTML =
-      '<iframe id="ketcherFrame" src="/sketcher/index.html"></iframe>';
-    el("stereoTip").innerHTML =
-      "<b>Stereocenters:</b> use Ketcher's wedge and hash bond tools " +
-      "(the bond tool dropdown) to set configuration at a center.";
-    buildBtn.disabled = false;
-    el("canvasStatus").textContent = "editor ready";
-  } else if (cfg.engine === "jsme") {
+  if (cfg.engine === "jsme") {
     const script = document.createElement("script");
     script.src = "/sketcher/jsme/jsme.nocache.js";
     document.head.appendChild(script);
   } else {
     el("sketchHost").innerHTML =
-      '<p class="sub">No editor could be fetched. Paste a molblock below.</p>' +
-      '<textarea id="pasteBox" style="width:100%;height:14rem;font-family:ui-monospace,monospace;font-size:.78rem"></textarea>';
+      '<p class="sub">The JSME editor could not be fetched, so this is the text ' +
+      'fallback — paste a molblock (or a SMILES string) below. Everything else on ' +
+      'this page works normally.</p>' +
+      '<textarea id="pasteBox" spellcheck="false" placeholder="paste MOL / SDF text, or a SMILES string" ' +
+      'style="width:100%;height:14rem;font-family:ui-monospace,monospace;font-size:.78rem;' +
+      'padding:.5rem;border:1px solid var(--border);border-radius:6px;' +
+      'background:var(--field);color:var(--fg)"></textarea>';
+    el("stereoTip").innerHTML =
+      "<b>Stereocenters:</b> in a pasted SMILES use <code>@</code> / <code>@@</code> " +
+      "for centers and <code>/</code> <code>\\</code> for double-bond geometry.";
     engineName = "paste";
     buildBtn.disabled = false;
   }

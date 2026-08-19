@@ -1,4 +1,0 @@
-[submodule "vendor/ketcher"]
-	path = vendor/ketcher
-	url = https://github.com/epam/ketcher.git
-	shallow = true

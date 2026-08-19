@@ -223,10 +223,31 @@ class TestSessionAPI:
         assert cfg["defaults"]["directory"] == str(tmp_path)
         assert any(b["id"] == "mmff94" for b in cfg["backends"])
 
-    def test_serves_a_page(self, session):
+    def test_serves_the_app_page_even_with_no_editor(self, session):
+        """One page for every case: with no editor it shows a paste box, and the
+        settings panel and run log still work."""
         base, _ = session
         page = urllib.request.urlopen(base + "/", timeout=5).read().decode()
-        assert "ligand3d" in page
+        assert "Run log" in page and "Backend chain" in page
+        assert "pasteBox" in page
+
+    def test_a_pasted_smiles_builds(self, session):
+        """The fallback path: no molblock, just a SMILES string in the box."""
+        base, tmp_path = session
+        code, data = _post(
+            base,
+            "/api/build",
+            {"molblock": "C[C@H](N)C(=O)O", "settings": _settings(tmp_path)},
+        )
+        assert code == 200, data
+        for _ in range(600):
+            job = _get(base, f"/api/job/{data['job_id']}")
+            if job["state"] in ("done", "error"):
+                break
+            time.sleep(0.1)
+        assert job["state"] == "done", job
+        assert any("pasted SMILES" in e["text"] for e in job["log"])
+        assert len(job["result"]["stereocenters"]) == 1
 
     def test_next_name_endpoint(self, session):
         base, tmp_path = session
@@ -369,8 +390,10 @@ class TestStaticAssets:
         for endpoint in ("/api/config", "/api/build", "/api/check-path", "/api/next-name"):
             assert endpoint in page, f"page never calls {endpoint}"
 
-    def test_fallback_page_exists(self):
-        assert (srv._STATIC / "fallback.html").is_file()
+    def test_no_reference_to_a_removed_editor(self):
+        """Ketcher was removed; nothing should still advertise it."""
+        text = srv.APP_PAGE.read_text().replace("/sketcher/", "/")
+        assert "ketcher" not in text.lower()
 
 
 class TestAppJavaScript:
@@ -408,7 +431,7 @@ class TestAppJavaScript:
         html = (srv._STATIC / "app.html").read_text()
         defined = set(re.findall(r'\bid="([A-Za-z0-9_]+)"', html))
         referenced = set(re.findall(r'\bel\("([A-Za-z0-9_]+)"\)', self._inline_script()))
-        # pasteBox and ketcherFrame are injected by script, not present in markup.
-        injected = {"pasteBox", "ketcherFrame"}
+        # pasteBox is injected by script, not present in the markup.
+        injected = {"pasteBox"}
         missing = referenced - defined - injected
         assert not missing, f"app.html references undefined ids: {sorted(missing)}"
