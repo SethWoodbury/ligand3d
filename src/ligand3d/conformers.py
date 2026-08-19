@@ -166,14 +166,18 @@ def prune(
 
     Returns the conformer ids to keep, best first.
     """
-    conf_ids = [c.GetId() for c in mol.GetConformers()]
-    ranked = sorted(conf_ids, key=lambda c: energies.get(c, float("inf")))
+    # Only conformers that actually minimized are candidates. Ranking a failed
+    # one as +inf still leaves it in the list whenever there is room, and the
+    # caller then looks up an energy that was never recorded.
+    conf_ids = [c.GetId() for c in mol.GetConformers() if c.GetId() in energies]
+    ranked = sorted(conf_ids, key=lambda c: energies[c])
     if not ranked:
         return []
 
-    best = energies.get(ranked[0], 0.0)
+    best = energies[ranked[0]]
+
     if energy_window is not None:
-        ranked = [c for c in ranked if energies.get(c, float("inf")) - best <= energy_window]
+        ranked = [c for c in ranked if energies[c] - best <= energy_window]
 
     kept: list[int] = []
     for cid in ranked:

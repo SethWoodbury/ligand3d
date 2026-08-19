@@ -22,9 +22,11 @@ from .molecule import (
     Molecule,
     enumerate_stereoisomers,
     has_real_stereo_ambiguity,
+    largest_fragment,
     require_defined_stereo,
+    require_single_fragment,
 )
-from .write import ConformerRecord, write_pdb, write_sdf
+from .write import ConformerRecord, verify_pdb_roundtrip, write_pdb, write_sdf
 
 
 @dataclass
@@ -42,6 +44,8 @@ class Settings:
     enumerate_states: bool = False
 
     stereo_mode: str = "require"  # require | any | enumerate
+    largest_fragment: bool = False
+    """Keep only the biggest disconnected component instead of refusing."""
 
     solvent: str | None = None
     auto_solvent: bool = True
@@ -74,7 +78,9 @@ class Outcome:
 
 
 def expand_inputs(molecule: Molecule, settings: Settings) -> list[Molecule]:
-    """Apply stereo and protonation policy, yielding the molecules to build."""
+    """Apply fragment, stereo, and protonation policy, yielding what to build."""
+    molecule = _resolve_fragments(molecule, settings)
+
     if settings.stereo_mode == "require":
         require_defined_stereo(molecule)
         molecules = [molecule]
@@ -98,6 +104,13 @@ def expand_inputs(molecule: Molecule, settings: Settings) -> list[Molecule]:
     return expanded
 
 
+def _resolve_fragments(molecule: Molecule, settings: Settings) -> Molecule:
+    if settings.largest_fragment:
+        return largest_fragment(molecule)
+    require_single_fragment(molecule)
+    return molecule
+
+
 def resolve_solvent(molecule: Molecule, settings: Settings, supports_solvation: bool) -> str | None:
     """Decide whether to use implicit solvent for this molecule.
 
@@ -114,13 +127,17 @@ def resolve_solvent(molecule: Molecule, settings: Settings, supports_solvation: 
 
 def build(molecule: Molecule, settings: Settings) -> Outcome:
     """Build and minimize one molecule. The core of the tool."""
-    notes: list[str] = list(molecule.notes)
-
     # `run` already screens inputs, but `build` is public and callers reach for
     # it directly. Re-checking here means the guarantee holds for the Python API
     # too, and it is idempotent for anything that came through `expand_inputs`.
+    #
+    # Screening comes first because it can annotate the molecule — discarding a
+    # counterion adds a note the user needs to see.
+    molecule = _resolve_fragments(molecule, settings)
     if settings.stereo_mode == "require":
         require_defined_stereo(molecule)
+
+    notes: list[str] = list(molecule.notes)
 
     chain = parse_chain(settings.backend)
     backends = [get_backend(name) for name in chain]
@@ -204,11 +221,16 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
         notes.append(f"kept {len(keep)} of {len(results)} minimized conformers after pruning")
 
     # Verify only after minimization: this is the point where a wrong answer
-    # would otherwise escape.
-    verify_stereo(final, molecule.stereo, context="minimization", conf_id=-1)
-    if not settings.allow_proton_transfer:
-        for conformer in final.GetConformers():
-            proton_mod.assert_protonation_intact(final, conf_id=conformer.GetId())
+    # would otherwise escape. Every conformer is checked, not just the first —
+    # an optimizer can invert one conformer and leave the rest alone, and
+    # checking the default conformer would ship the other five as the
+    # enantiomer of what was asked for.
+    for conformer in final.GetConformers():
+        cid = conformer.GetId()
+        verify_stereo(final, molecule.stereo, context="minimization", conf_id=cid)
+        if not settings.allow_proton_transfer:
+            proton_mod.assert_protonation_intact(final, conf_id=cid)
+            proton_mod.assert_connectivity_intact(final, conf_id=cid)
 
     records = [
         ConformerRecord(
@@ -248,6 +270,9 @@ def run(
                 smiles=variant.smiles,
                 extra_remarks=[f"SOURCE {variant.source}"[:68]],
             )
+            # Confirm what we just wrote is readable and its atom names are
+            # unique, rather than trusting the writer.
+            verify_pdb_roundtrip(outcome.pdb_path, outcome.mol_3d)
             if settings.write_sdf:
                 outcome.sdf_path = write_sdf(
                     path.with_suffix(".sdf"),

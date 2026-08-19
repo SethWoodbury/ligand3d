@@ -167,15 +167,33 @@ diagnosable without reading source. The same mechanism finds the Ketcher bundle.
 ## Sketcher
 
 `ligand3d sketch` serves a small page from `http.server` on localhost, opens a browser,
-and waits. The page hosts Ketcher (Apache-2.0); pressing "Use this molecule" POSTs a
-molblock back, the server shuts down, and the molecule enters the pipeline exactly as if
-it had been passed on the command line. `--no-browser` prints the URL instead, which is
-what you want over SSH with a forwarded port.
+and waits. Pressing "Use this molecule" POSTs a molblock back, the server shuts down,
+and the molecule enters the pipeline exactly as if it had been passed on the command
+line. `--no-browser` prints the URL instead, which is what you want over SSH with a
+forwarded port.
 
-Ketcher's prebuilt standalone bundle is 35 MB, so it is fetched on demand into
-`~/.cache/ligand3d/ketcher/` rather than committed. The submodule under `vendor/ketcher`
-pins the upstream source for provenance and for building from scratch if the release
-asset ever disappears.
+**Correction from the original plan.** The design assumed Ketcher could be fetched and
+served directly. It cannot: `ketcher-standalone.zip` is the npm library — `index.js`,
+`main.js`, and TypeScript declarations, with no HTML file anywhere in the archive — so
+unzipping it yields nothing a browser can open. Using Ketcher means running its npm
+build.
+
+The default is therefore **JSME**, which genuinely is a drop-in: a 1 MB zip whose single
+`jsme.nocache.js` loader runs entirely in the browser. It is fetched once into
+`~/.cache/ligand3d/jsme/` and works offline thereafter, and it handles wedge and hash
+bonds, so drawn stereocentres arrive as real stereochemistry.
+
+Ketcher remains supported for anyone who builds it: set `LIGAND3D_KETCHER_DIR` to a
+directory containing `index.html` and it is preferred over JSME. The `vendor/ketcher`
+submodule pins the upstream source for that purpose; a normal clone does not fetch it.
+
+If neither engine is available the page degrades to a paste box accepting SMILES or a
+molblock.
+
+One trap worth recording: the molblock must be returned to the pipeline **verbatim**.
+Its first line is the molecule-name field and is routinely empty, so calling `.strip()`
+on it shifts every subsequent line up one, puts the counts line where the header belongs,
+and produces a file no parser accepts.
 
 ## Dependencies
 

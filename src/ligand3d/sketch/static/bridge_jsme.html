@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ligand3d — sketch</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #16181d; --muted: #5c6370;
+    --border: #d8dce3; --accent: #2f6f4f; --accent-fg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --fg: #e8eaee; --muted: #9aa2ae;
+      --border: #2e333c; --accent: #4c9a72; --accent-fg: #0d0f12;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: .7rem 1rem; border-bottom: 1px solid var(--border); flex: none;
+  }
+  h1 { font-size: 1rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .hint { color: var(--muted); font-size: .82rem; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer;
+    padding: .5rem 1.1rem; border-radius: 6px;
+    border: 1px solid transparent; background: var(--accent); color: var(--accent-fg);
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  #jsme { width: 100%; max-width: 760px; }
+  footer {
+    padding: .6rem 1rem; border-top: 1px solid var(--border);
+    color: var(--muted); font-size: .82rem; flex: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+  }
+  footer.error { color: #c0392b; }
+  footer.ok { color: var(--accent); }
+</style>
+<script src="/sketcher/jsme/jsme.nocache.js"></script>
+</head>
+<body>
+<header>
+  <h1>ligand3d</h1>
+  <span class="hint">
+    Draw a molecule. Use the wedge and hash bond tools for stereocenters — they
+    come back as real stereochemistry.
+  </span>
+  <span class="spacer"></span>
+  <button id="send" disabled>Use this molecule</button>
+</header>
+
+<main><div id="jsme"></div></main>
+<footer id="status">loading the sketcher…</footer>
+
+<script>
+const statusEl = document.getElementById('status');
+const sendBtn = document.getElementById('send');
+let applet = null;
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = kind || '';
+}
+
+// JSME calls this global once its GWT bundle has booted.
+function jsmeOnLoad() {
+  applet = new JSApplet.JSME('jsme', '740px', '440px', {
+    options: 'oldlook,star,newlook',
+  });
+  sendBtn.disabled = false;
+  setStatus('ready — draw a structure, then press "Use this molecule"');
+}
+
+setTimeout(() => {
+  if (!applet) setStatus('the sketcher did not load; reload the page', 'error');
+}, 30000);
+
+sendBtn.addEventListener('click', async () => {
+  if (!applet) { setStatus('sketcher is not ready yet', 'error'); return; }
+
+  const molblock = applet.molFile(false);
+  if (!molblock || !molblock.trim() || applet.smiles() === '') {
+    setStatus('the canvas is empty — draw something first', 'error');
+    return;
+  }
+
+  sendBtn.disabled = true;
+  let smiles = '';
+  try { smiles = applet.smiles(); } catch (e) { /* optional */ }
+
+  try {
+    const response = await fetch('/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ molblock, smiles }),
+    });
+    if (!response.ok) throw new Error('server returned ' + response.status);
+    setStatus('sent' + (smiles ? ': ' + smiles : '') + ' — you can close this tab', 'ok');
+    sendBtn.textContent = 'Sent';
+  } catch (err) {
+    setStatus('could not send: ' + err.message, 'error');
+    sendBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

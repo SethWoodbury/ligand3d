@@ -102,18 +102,25 @@ def _bond_stereo(mol: Chem.Mol) -> tuple[list[tuple[int, int, str]], list[tuple[
         name = str(st)
         if st == Chem.BondStereo.STEREONONE:
             continue
-        if st in (Chem.BondStereo.STEREOANY,):
+        if st == Chem.BondStereo.STEREOANY:
             unassigned.append((i, j))
         elif name in ("STEREOE", "STEREOZ"):
             assigned.append((i, j, name[-1]))
-        elif name in ("STEREOCIS", "STEREOTRANS"):
-            # Resolve to E/Z via the CIP labeller, which sets the bond's
-            # _CIPCode property when it can.
+        else:
+            # Everything else — STEREOCIS/STEREOTRANS, and the atropisomer
+            # labels — reaches here. Callers always run
+            # AssignStereochemistry(cleanIt=True, force=True) first, which
+            # rewrites CIS/TRANS into E/Z, so in practice this is only the
+            # atropisomer path.
+            #
+            # CIS/TRANS is defined relative to a pair of reference atoms while
+            # E/Z is CIP, so the two families must never be compared against
+            # each other. Prefer the CIP code when the labeller set one, and
+            # otherwise keep the raw label, which still compares like for like
+            # between the input and the structure perceived from 3D. Dropping
+            # it instead would silently stop checking a defined stereo element.
             code = bond.GetPropsAsDict().get("_CIPCode")
-            if code in ("E", "Z"):
-                assigned.append((i, j, code))
-            else:
-                unassigned.append((i, j))
+            assigned.append((i, j, code if code in ("E", "Z") else name))
     return assigned, unassigned
 
 
@@ -172,6 +179,56 @@ class Molecule:
     @property
     def elements(self) -> frozenset[int]:
         return frozenset(a.GetAtomicNum() for a in self.mol.GetAtoms())
+
+    @property
+    def fragments(self) -> tuple[str, ...]:
+        """Canonical SMILES of each disconnected component."""
+        return tuple(sorted(self.smiles.split(".")))
+
+    @property
+    def n_fragments(self) -> int:
+        return len(Chem.GetMolFrags(self.mol))
+
+
+def require_single_fragment(molecule: Molecule) -> None:
+    """Refuse disconnected inputs such as a salt or a solvate.
+
+    Distance geometry has no restraints between disconnected components, so
+    ETKDG places them on top of one another — measured inter-fragment distances
+    of 0.0 Å, and a force field with a fixed bond list cannot pull them apart.
+    The result looks like a structure and is physically impossible.
+
+    Rather than emit that, or guess at a placement nobody asked for, say so.
+    """
+    if molecule.n_fragments <= 1:
+        return
+    parts = " + ".join(molecule.fragments)
+    raise InputError(
+        f"input has {molecule.n_fragments} disconnected fragments ({parts}). "
+        "ligand3d builds one molecule at a time, and 3D embedding would stack "
+        "the fragments on top of each other. Build the component you want on "
+        "its own, or pass --largest-fragment to keep the biggest one."
+    )
+
+
+def largest_fragment(molecule: Molecule) -> Molecule:
+    """Keep the largest disconnected component, discarding counterions."""
+    frags = Chem.GetMolFrags(molecule.mol, asMols=True, sanitizeFrags=True)
+    if len(frags) <= 1:
+        return molecule
+    biggest = max(frags, key=lambda m: (m.GetNumHeavyAtoms(), m.GetNumAtoms()))
+    kept = Molecule(
+        mol=biggest,
+        source=f"{molecule.source} [largest of {len(frags)} fragments]",
+        name=molecule.name,
+        stereo=audit_stereo(biggest),
+        notes=list(molecule.notes),
+    )
+    dropped = sorted(
+        Chem.MolToSmiles(f) for f in frags if f is not biggest
+    )
+    kept.notes.append(f"discarded {len(frags) - 1} smaller fragment(s): {', '.join(dropped)}")
+    return kept
 
 
 def from_smiles(smiles: str, name: str = "LIG") -> Molecule:
@@ -252,10 +309,27 @@ def read_input(spec: str, name: str | None = None) -> Molecule:
 
 
 def _finish(mol: Chem.Mol, source: str, name: str) -> Molecule:
-    """Sanitize, perceive stereo, and audit. Shared tail of every reader."""
+    """Sanitize, normalize hydrogens, perceive stereo, and audit.
+
+    Shared tail of every reader.
+    """
     try:
         with rdkit_quiet():
             Chem.SanitizeMol(mol)
+            # Collapse explicit hydrogens into implicit counts.
+            #
+            # This is what keeps atom indices meaningful. Stereo is audited here
+            # and re-checked later against a structure that has been through
+            # AddHs and RemoveHs, and RemoveHs yields heavy-atom-only numbering.
+            # A .mol/.sdf file that lists its hydrogens first — legal and common
+            # — would otherwise audit as "stereocenter at atom 8" and verify as
+            # "stereocenter at atom 1", and every such file would be rejected as
+            # having lost its stereochemistry. AddHs re-adds them at the end, so
+            # heavy-atom indices survive the round trip.
+            #
+            # RemoveHs deliberately keeps isotope-labelled hydrogens, so
+            # deuterium is not silently discarded.
+            mol = Chem.RemoveHs(mol)
             Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
     except Exception as exc:  # RDKit raises bare exceptions here
         raise InputError(f"molecule failed sanitization: {exc}") from exc

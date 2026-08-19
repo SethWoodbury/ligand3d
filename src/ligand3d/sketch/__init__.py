@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
-from .server import ensure_ketcher, ketcher_is_available, sketch_molecule
+from .server import (
+    Engine,
+    choose_engine,
+    ensure_jsme,
+    ketcher_is_available,
+    sketch_molecule,
+)
 
-__all__ = ["ensure_ketcher", "ketcher_is_available", "sketch_molecule"]
+__all__ = [
+    "Engine",
+    "choose_engine",
+    "ensure_jsme",
+    "ketcher_is_available",
+    "sketch_molecule",
+]

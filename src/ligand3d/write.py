@@ -18,6 +18,47 @@ from .molecule import rdkit_quiet
 
 _MAX_RESNAME = 3
 
+# Digits used to keep atom names inside the four columns PDB allows. Base 36
+# gets a single-letter element to 46655 atoms, far beyond anything this tool
+# will be handed.
+_BASE36 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _base36(n: int) -> str:
+    if n == 0:
+        return "0"
+    out = ""
+    while n:
+        n, r = divmod(n, 36)
+        out = _BASE36[r] + out
+    return out
+
+
+def _atom_name(symbol: str, index: int) -> str:
+    """Build a unique four-character PDB atom name.
+
+    Atom names occupy columns 13-16, and the convention that keeps one- and
+    two-letter elements aligned is to indent single-letter elements by one
+    space. That leaves only two digits for a single-letter element, so a
+    molecule with 100 or more carbons used to truncate C100 to "C10" and
+    collide with the real C10 — silently producing a file whose atom names are
+    not unique, which is exactly what PDB readers key on.
+
+    Past the point where decimal no longer fits, the space is reclaimed and
+    then the counter switches to base 36.
+    """
+    decimal = f"{symbol}{index}"
+    if len(symbol) == 1 and len(decimal) <= 3:
+        return f" {decimal}".ljust(4)
+    if len(decimal) <= 4:
+        return decimal.ljust(4)
+
+    packed = f"{symbol}{_base36(index)}"
+    if len(packed) <= 4:
+        return packed.ljust(4)
+    # Nothing sane reaches here; truncate rather than emit a malformed column.
+    return packed[:4]
+
 
 @dataclass(frozen=True)
 class ConformerRecord:
@@ -44,14 +85,7 @@ def assign_pdb_names(mol: Chem.Mol, resname: str = "LIG", chain: str = "A") -> C
     for atom in out.GetAtoms():
         sym = atom.GetSymbol().upper()
         counts[sym] = counts.get(sym, 0) + 1
-        # PDB atom names live in columns 13-16. The convention that keeps
-        # one- and two-letter elements aligned is to left-pad single-letter
-        # element names by one space.
-        label = f"{sym}{counts[sym]}"
-        if len(sym) == 1:
-            name = f" {label}".ljust(4)[:4]
-        else:
-            name = label.ljust(4)[:4]
+        name = _atom_name(sym, counts[sym])
         info = Chem.AtomPDBResidueInfo()
         info.SetName(name)
         info.SetResidueName(resname.ljust(3))

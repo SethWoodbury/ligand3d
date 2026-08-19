@@ -10,8 +10,8 @@ level of theory you choose, optionally searches conformers, and writes a `.pdb`.
 ligand3d build "O=C1CN2CCC1CC2" -o quinuclidinone.pdb
 ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --backend gfn2 -o gabapentin.pdb
 ligand3d build "C[C@@H](O)[C@H](N)C(=O)O" --backend mmff94,gfn2 --confs 20 -o threonine.pdb
-ligand3d sketch                       # draw it, then the pipeline runs on what you drew
-ligand3d doctor                       # what's installed, what isn't, and why
+ligand3d sketch                        # draw it, then the pipeline runs on what you drew
+ligand3d doctor                        # what's installed, what isn't, and why
 ```
 
 ## Why this exists
@@ -83,6 +83,23 @@ ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 2.0              # at pH 2
 ligand3d build "NCC1(CC(=O)O)CCCCC1" --protonate --enumerate-states  # one file per state
 ```
 
+## What it refuses to do
+
+Three inputs are rejected rather than answered, because the answer would be wrong
+in a way that looks right:
+
+- **Undefined stereochemistry** — unless you pass `--stereo any` or
+  `--stereo enumerate`. Constrained centers that only look stereogenic (the
+  bridgeheads of 3-quinuclidinone, say) are not an ambiguity and do not trigger this.
+- **Disconnected fragments** — a salt or solvate. Distance geometry has no restraints
+  between components and stacks them on top of each other, at measured separations of
+  0.0 Å. Use `--largest-fragment` to keep the biggest component and drop the counterion.
+- **A charged molecule on a potential with no charge channel**, or a zwitterion on one
+  with no implicit solvent. Override with `--allow-charge-mismatch` if you mean it.
+
+After minimization it also verifies that stereochemistry, protonation state, and
+heavy-atom connectivity all survived — on every conformer, not just the first.
+
 ## Conformers
 
 ```bash
@@ -93,6 +110,33 @@ ligand3d build "<smiles>" --confs 50 --conf-method crest   # CREST metadynamics
 The RDKit method takes seconds. CREST takes minutes and finds far more — 145 unique
 conformers for gabapentin in about five wall-clock minutes on eight threads — and needs
 a `crest` binary, which `ligand3d doctor` will locate or tell you how to provide.
+
+## Drawing
+
+`ligand3d sketch` starts a local web server, opens a browser, and waits. Draw a
+structure — wedge and hash bonds become real stereocenters — press **Use this
+molecule**, and the pipeline runs on what you drew.
+
+It ships with [JSME](https://jsme-editor.github.io/), fetched once (about 1 MB) into
+`~/.cache/ligand3d/` and thereafter working offline. Nothing is sent anywhere: the
+server is bound to `127.0.0.1` and shuts down as soon as you submit.
+
+```bash
+ligand3d sketch                              # draw, build, write sketch.pdb
+ligand3d sketch --backend gfn2 -o mol.pdb    # any build option applies
+ligand3d sketch --no-browser                 # print the URL instead (SSH port-forwarding)
+ligand3d sketch --smiles-only                # just tell me the SMILES
+```
+
+[Ketcher](https://github.com/epam/ketcher) is a nicer editor and is supported, but EPAM
+publishes it as an npm library rather than a servable page — `ketcher-standalone.zip`
+contains no HTML at all — so it cannot be fetched and used automatically. Build it
+yourself and point `LIGAND3D_KETCHER_DIR` at the directory holding the resulting
+`index.html`, and it will be used in preference to JSME. The pinned upstream source is
+the `vendor/ketcher` submodule, which a normal clone does not download.
+
+If neither can be reached, the page degrades to a paste box that accepts a SMILES
+string or a molblock, so the command still works on an air-gapped machine.
 
 ## Configuration
 
@@ -119,7 +163,8 @@ because PDB does not carry bond orders reliably and you will want them back.
 [MACE](https://github.com/ACEsuit/mace) and
 [AIMNet2](https://github.com/isayevlab/aimnetcentral) (ML potentials),
 [ASE](https://wiki.fysik.dtu.dk/ase/) (optimizers),
-[Ketcher](https://github.com/epam/ketcher) (2D sketcher).
+[JSME](https://jsme-editor.github.io/) and
+[Ketcher](https://github.com/epam/ketcher) (2D sketchers).
 
 ## License
 

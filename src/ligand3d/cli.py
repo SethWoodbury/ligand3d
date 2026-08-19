@@ -69,6 +69,11 @@ def build(
         help="Undefined stereocenters: 'require' to error, 'any' to let RDKit pick, "
         "'enumerate' to build every isomer.",
     ),
+    largest_fragment: bool = typer.Option(
+        False,
+        "--largest-fragment",
+        help="For a salt or solvate, keep the biggest component instead of refusing.",
+    ),
     solvent: Optional[str] = typer.Option(
         None, "--solvent", help="Implicit solvent for backends that support it, e.g. water."
     ),
@@ -124,6 +129,7 @@ def build(
         ph=ph,
         enumerate_states=enumerate_states,
         stereo_mode=stereo,
+        largest_fragment=largest_fragment,
         solvent=solvent,
         auto_solvent=not no_auto_solvent,
         allow_charge_mismatch=allow_charge_mismatch,

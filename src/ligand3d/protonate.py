@@ -26,23 +26,26 @@ from .molecule import Molecule, audit_stereo, rdkit_quiet
 
 DEFAULT_PH = 7.4
 
-# Covalent radii (Angstrom) for the elements a hydrogen might bond to. Used to
-# decide whether an H is covalently bound or merely hydrogen-bonded.
-_COVALENT_H_CUTOFF = {
-    1: 0.9,
-    5: 1.45,
-    6: 1.35,
-    7: 1.25,
-    8: 1.20,
-    9: 1.15,
-    14: 1.65,
-    15: 1.60,
-    16: 1.55,
-    17: 1.50,
-    35: 1.65,
-    53: 1.85,
-}
-_DEFAULT_H_CUTOFF = 1.45
+_H_COVALENT_RADIUS = 0.31  # Angstrom
+_BOND_TOLERANCE = 1.30
+"""How far past the sum of covalent radii still counts as a bond.
+
+Generous on purpose. The check exists to catch a proton that jumped to a
+different heavy atom, which moves it by an angstrom or more; being strict here
+buys nothing and starts rejecting long but perfectly real bonds.
+"""
+
+
+def _bond_cutoff(z_a: int, z_b: int) -> float:
+    """Maximum distance at which two elements count as bonded.
+
+    Derived from RDKit's periodic table rather than a hand-written dict, which
+    silently defaulted heavier elements to a cutoff shorter than their actual
+    X-H bond length: Se-H is 1.46 A and As-H 1.52 A, so `C[SeH]` and `[AsH3]`
+    were reported as having lost a hydrogen that had never moved.
+    """
+    table = Chem.GetPeriodicTable()
+    return (table.GetRcovalent(z_a) + table.GetRcovalent(z_b)) * _BOND_TOLERANCE
 
 
 @dataclass(frozen=True)
@@ -195,19 +198,27 @@ def hydrogen_partners(mol: Chem.Mol, conf_id: int = -1) -> dict[int, int]:
         h = atom.GetIdx()
         distances = np.linalg.norm(heavy_pos - positions[h], axis=1)
         nearest = int(np.argmin(distances))
-        cutoff = _COVALENT_H_CUTOFF.get(heavy_z[nearest], _DEFAULT_H_CUTOFF)
+        cutoff = _bond_cutoff(1, heavy_z[nearest])
         partners[h] = heavy[nearest] if distances[nearest] <= cutoff else -1
     return partners
 
 
 def topological_hydrogen_partners(mol: Chem.Mol) -> dict[int, int]:
-    """Map each hydrogen to its bonded heavy atom according to the bond table."""
+    """Map each hydrogen to its bonded heavy atom according to the bond table.
+
+    Hydrogens bonded only to other hydrogens (H2) have no heavy partner and are
+    left out entirely, so they are not compared against a geometric map that
+    cannot contain them either.
+    """
     partners: dict[int, int] = {}
     for atom in mol.GetAtoms():
         if atom.GetAtomicNum() != 1:
             continue
-        neighbors = [n.GetIdx() for n in atom.GetNeighbors()]
-        partners[atom.GetIdx()] = neighbors[0] if neighbors else -1
+        heavy_neighbors = [
+            n.GetIdx() for n in atom.GetNeighbors() if n.GetAtomicNum() != 1
+        ]
+        if heavy_neighbors:
+            partners[atom.GetIdx()] = heavy_neighbors[0]
     return partners
 
 
@@ -248,6 +259,45 @@ def _atom_label(mol: Chem.Mol, idx: int) -> str:
         return "nothing"
     atom = mol.GetAtomWithIdx(idx)
     return f"{atom.GetSymbol()}{idx}"
+
+
+def assert_connectivity_intact(
+    mol_3d: Chem.Mol, conf_id: int = -1, context: str = "minimization"
+) -> None:
+    """Raise if any heavy-atom bond was stretched past breaking, or one formed.
+
+    The hydrogen check catches a proton hopping between heteroatoms, which is
+    the common failure. It does not catch a potential that breaks a C-C bond or
+    closes a ring that was not there — semi-empirical methods and machine-learned
+    potentials both work from positions alone and can do either. Bond orders are
+    fixed in the RDKit molecule, so a broken bond leaves no trace in the output
+    except two atoms implausibly far apart.
+    """
+    conf = mol_3d.GetConformer(conf_id)
+    positions = np.asarray(conf.GetPositions(), dtype=float)
+
+    broken: list[str] = []
+    for bond in mol_3d.GetBonds():
+        i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        z_i = mol_3d.GetAtomWithIdx(i).GetAtomicNum()
+        z_j = mol_3d.GetAtomWithIdx(j).GetAtomicNum()
+        if z_i == 1 or z_j == 1:
+            continue  # hydrogens are covered by the protonation check
+        distance = float(np.linalg.norm(positions[i] - positions[j]))
+        cutoff = _bond_cutoff(z_i, z_j)
+        if distance > cutoff:
+            broken.append(
+                f"  {_atom_label(mol_3d, i)}-{_atom_label(mol_3d, j)} is "
+                f"{distance:.2f} A apart (bonded, expected under {cutoff:.2f} A)"
+            )
+
+    if broken:
+        raise ProtonationError(
+            f"heavy-atom connectivity changed during {context}:\n"
+            + "\n".join(broken)
+            + "\n\nThe optimizer pulled a bond apart. Try a different backend, or "
+            "check the input geometry is sane."
+        )
 
 
 def suggest_solvent(molecule: Molecule) -> str | None:

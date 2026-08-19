@@ -4,10 +4,18 @@ The flow is deliberately blunt: start a localhost HTTP server, open a browser at
 it, block until the page POSTs a molblock back, shut down, and hand the molblock
 to the same pipeline the command line uses. No persistent daemon, no state.
 
-Ketcher's prebuilt bundle is 35 MB, which is too much to commit, so it is fetched
-on demand into the cache. If it cannot be fetched — no network, or a locked-down
-machine — the server falls back to a plain paste box that accepts SMILES or a
-molblock, so `ligand3d sketch` still does something useful.
+Three engines, tried in order:
+
+- **JSME** — the default. One 1 MB zip containing a single `jsme.nocache.js`
+  loader that runs entirely in the browser. It is fetched on first use and then
+  works offline forever.
+- **Ketcher** — nicer to use, but EPAM ships it as an npm library rather than a
+  servable page: `ketcher-standalone.zip` contains `index.js` and `main.js` and
+  no HTML at all, so it cannot simply be unzipped and served. Point
+  `LIGAND3D_KETCHER_DIR` at a directory containing a built `index.html` and this
+  will use it in preference to JSME.
+- **A plain paste box** — the fallback when nothing can be fetched, so
+  `ligand3d sketch` still does something useful on an air-gapped machine.
 """
 
 from __future__ import annotations
@@ -19,21 +27,81 @@ import shutil
 import socket
 import socketserver
 import threading
+import urllib.parse
 import urllib.request
 import webbrowser
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import Ligand3DError
 
-KETCHER_RELEASE = "v3.17.0"
-KETCHER_URL = (
-    f"https://github.com/epam/ketcher/releases/download/{KETCHER_RELEASE}/"
-    "ketcher-standalone.zip"
+JSME_RELEASE = "JSME_2024-04-29"
+JSME_URL = (
+    "https://raw.githubusercontent.com/jsme-editor/jsme-editor.github.io/"
+    f"master/downloads/{JSME_RELEASE}.zip"
 )
 
 _HERE = Path(__file__).parent
 _STATIC = _HERE / "static"
+
+
+@dataclass(frozen=True)
+class Engine:
+    """A sketcher that can be served from disk."""
+
+    name: str
+    root: Path
+    page: str
+
+    @property
+    def bridge(self) -> Path:
+        return _STATIC / self.page
+
+
+def _extract(payload: bytes, target: Path, strip_prefix: str | None = None) -> None:
+    """Unpack a zip, optionally dropping one leading path component.
+
+    Skips the `__MACOSX` metadata directories that these archives carry.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        for member in archive.infolist():
+            name = member.filename
+            if name.startswith("__MACOSX") or "/._" in name or name.endswith("/._"):
+                continue
+            if strip_prefix:
+                if not name.startswith(strip_prefix):
+                    continue
+                name = name[len(strip_prefix) :]
+            if not name or name.endswith("/"):
+                continue
+            destination = target / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source, open(destination, "wb") as out:
+                shutil.copyfileobj(source, out)
+
+
+def ensure_jsme(quiet: bool = False) -> Path | None:
+    """Download and unpack JSME if it isn't cached already."""
+    from ..config import jsme_dir
+
+    target = jsme_dir()
+    if (target / "jsme" / "jsme.nocache.js").exists():
+        return target
+
+    try:
+        if not quiet:
+            print(f"fetching the JSME sketcher ({JSME_RELEASE}, ~1 MB, one time) ...")
+        with urllib.request.urlopen(JSME_URL, timeout=180) as response:
+            payload = response.read()
+        _extract(payload, target, strip_prefix=f"{JSME_RELEASE}/")
+    except Exception as exc:
+        if not quiet:
+            print(f"  could not fetch JSME: {exc}")
+        return None
+
+    return target if (target / "jsme" / "jsme.nocache.js").exists() else None
 
 
 def ketcher_is_available() -> bool:
@@ -42,43 +110,27 @@ def ketcher_is_available() -> bool:
     return (ketcher_dir() / "index.html").exists()
 
 
-def ensure_ketcher(quiet: bool = False) -> Path | None:
-    """Download and unpack the Ketcher bundle if it isn't cached already."""
+def choose_engine(quiet: bool = False) -> Engine | None:
+    """Pick the best sketcher available, fetching JSME if need be."""
     from ..config import ketcher_dir
 
-    target = ketcher_dir()
-    if (target / "index.html").exists():
-        return target
+    ketcher = ketcher_dir()
+    if (ketcher / "index.html").exists():
+        return Engine(name="ketcher", root=ketcher, page="bridge_ketcher.html")
 
-    target.mkdir(parents=True, exist_ok=True)
-    try:
-        if not quiet:
-            print(f"fetching Ketcher {KETCHER_RELEASE} (~35 MB, one time) ...")
-        with urllib.request.urlopen(KETCHER_URL, timeout=120) as response:
-            payload = response.read()
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            archive.extractall(target)
-    except Exception:
-        return None
+    jsme = ensure_jsme(quiet=quiet)
+    if jsme is not None:
+        return Engine(name="jsme", root=jsme, page="bridge_jsme.html")
 
-    if (target / "index.html").exists():
-        return target
-    # Some releases nest everything one directory deep.
-    for candidate in target.iterdir():
-        if candidate.is_dir() and (candidate / "index.html").exists():
-            for item in candidate.iterdir():
-                shutil.move(str(item), str(target / item.name))
-            candidate.rmdir()
-            return target
     return None
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
-    """Serves the bridge page, the Ketcher bundle, and accepts one submission."""
+    """Serves the bridge page, the sketcher assets, and accepts one submission."""
 
     result: dict = {}
     done: threading.Event
-    ketcher_root: Path | None = None
+    engine: Engine | None = None
 
     def log_message(self, *args) -> None:  # silence the default access log
         pass
@@ -92,37 +144,37 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
-        path = self.path.split("?", 1)[0]
+        path = urllib.parse.unquote(self.path.split("?", 1)[0])
 
         if path in ("/", "/index.html"):
-            page = _STATIC / ("bridge.html" if self.ketcher_root else "fallback.html")
+            page = self.engine.bridge if self.engine else _STATIC / "fallback.html"
             self._send(200, page.read_bytes(), "text/html; charset=utf-8")
             return
 
         if path == "/status":
-            self._send(
-                200,
-                json.dumps({"ketcher": bool(self.ketcher_root)}).encode(),
-                "application/json",
-            )
+            body = {"engine": self.engine.name if self.engine else None}
+            self._send(200, json.dumps(body).encode(), "application/json")
             return
 
-        if path.startswith("/ketcher/") and self.ketcher_root:
-            relative = path[len("/ketcher/") :] or "index.html"
-            target = (self.ketcher_root / relative).resolve()
-            try:
-                target.relative_to(self.ketcher_root.resolve())
-            except ValueError:
-                self._send(403, b"forbidden", "text/plain")
-                return
-            if not target.is_file():
-                self._send(404, b"not found", "text/plain")
-                return
-            ctype = self.guess_type(str(target))
-            self._send(200, target.read_bytes(), ctype)
+        if path.startswith("/sketcher/") and self.engine:
+            self._serve_asset(path[len("/sketcher/") :] or "index.html")
             return
 
         self._send(404, b"not found", "text/plain")
+
+    def _serve_asset(self, relative: str) -> None:
+        """Serve a file from the engine's directory, and nothing outside it."""
+        root = self.engine.root.resolve()
+        target = (root / relative).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            self._send(403, b"forbidden", "text/plain")
+            return
+        if not target.is_file():
+            self._send(404, b"not found", "text/plain")
+            return
+        self._send(200, target.read_bytes(), self.guess_type(str(target)))
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
         if self.path.split("?", 1)[0] != "/submit":
@@ -167,22 +219,17 @@ def sketch_molecule(
 ) -> str | None:
     """Serve the sketcher and block until a molecule comes back.
 
-    Returns a molblock, or None if the user closed the page without submitting.
+    Returns a molblock, or None if the page was closed without submitting.
     """
-    ketcher_root = ensure_ketcher(quiet=quiet)
-    if ketcher_root is None and not quiet:
-        print(
-            "could not fetch Ketcher; falling back to a paste box "
-            "(set LIGAND3D_KETCHER_DIR to use a local build)"
-        )
+    engine = choose_engine(quiet=quiet)
+    if engine is None and not quiet:
+        print("no sketcher available; falling back to a paste box")
 
     port = port or _free_port()
     done = threading.Event()
 
     handler = type(
-        "_BoundHandler",
-        (_Handler,),
-        {"result": {}, "done": done, "ketcher_root": ketcher_root},
+        "_BoundHandler", (_Handler,), {"result": {}, "done": done, "engine": engine}
     )
 
     try:
@@ -198,7 +245,8 @@ def sketch_molecule(
 
     url = f"http://127.0.0.1:{port}/"
     if not quiet:
-        print(f"sketcher running at {url}")
+        label = engine.name if engine else "paste box"
+        print(f"sketcher ({label}) running at {url}")
         print("draw a molecule, then press 'Use this molecule'. Ctrl-C to cancel.")
     if open_browser:
         try:
@@ -214,20 +262,34 @@ def sketch_molecule(
         server.shutdown()
         server.server_close()
 
-    molblock = handler.result.get("molblock") or ""
-    if not molblock.strip():
-        smiles = handler.result.get("smiles", "").strip()
-        if smiles:
-            from rdkit import Chem
+    return _to_molblock(handler.result)
 
-            from ..molecule import rdkit_quiet
 
-            with rdkit_quiet():
-                mol = Chem.MolFromSmiles(smiles)
-            if mol is not None:
-                from rdkit.Chem import AllChem
+def _to_molblock(result: dict) -> str | None:
+    """Prefer the molblock; fall back to building one from a SMILES string.
 
-                AllChem.Compute2DCoords(mol)
-                return Chem.MolToMolBlock(mol)
+    The molblock is returned verbatim. Its first line is the molecule-name
+    field, which is routinely empty, so stripping leading whitespace shifts
+    every subsequent line up one and the counts line lands where the header
+    belongs — producing a file no parser will accept. Strip only to test
+    whether anything was sent.
+    """
+    molblock = result.get("molblock") or ""
+    if molblock.strip():
+        return molblock
+
+    smiles = (result.get("smiles") or "").strip()
+    if not smiles:
         return None
-    return molblock
+
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from ..molecule import rdkit_quiet
+
+    with rdkit_quiet():
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+        AllChem.Compute2DCoords(mol)
+        return Chem.MolToMolBlock(mol)
