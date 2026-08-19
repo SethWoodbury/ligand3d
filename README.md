@@ -77,10 +77,10 @@ The default is **what you drew**. If you type a neutral carboxylic acid you get 
 neutral carboxylic acid.
 
 ```bash
-ligand3d build "NCC1(CC(=O)O)CCCCC1"                      # as drawn
-ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph                 # dimorphite-dl at pH 7.4
-ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 2.0             # at pH 2
-ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph --enumerate-states  # one file per state
+ligand3d build "NCC1(CC(=O)O)CCCCC1"                       # as drawn
+ligand3d build "NCC1(CC(=O)O)CCCCC1" --protonate           # dimorphite-dl at pH 7.4
+ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 2.0              # at pH 2
+ligand3d build "NCC1(CC(=O)O)CCCCC1" --protonate --enumerate-states  # one file per state
 ```
 
 ## Conformers

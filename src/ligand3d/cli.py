@@ -14,6 +14,7 @@ from rich.table import Table
 from . import __version__
 from .errors import Ligand3DError
 from .molecule import read_input
+from .protonate import DEFAULT_PH
 
 app = typer.Typer(
     name="ligand3d",
@@ -51,8 +52,13 @@ def build(
     ph: Optional[float] = typer.Option(
         None,
         "--ph",
-        help="Assign protonation state at this pH (default 7.4 if the flag is given "
-        "without a value). Omit the flag entirely to keep the structure as drawn.",
+        help="Assign the protonation state at this pH, e.g. --ph 7.4. "
+        "Omit it to keep the structure exactly as drawn.",
+    ),
+    protonate: bool = typer.Option(
+        False,
+        "--protonate",
+        help=f"Shorthand for --ph {DEFAULT_PH}.",
     ),
     enumerate_states: bool = typer.Option(
         False, "--enumerate-states", help="Write one file per plausible protonation state."
@@ -101,6 +107,13 @@ def build(
 
     if stereo not in ("require", "any", "enumerate"):
         _fail(ValueError(f"--stereo must be require, any, or enumerate (got {stereo!r})"))
+
+    if protonate and ph is not None and ph != DEFAULT_PH:
+        _fail(ValueError(f"--protonate means --ph {DEFAULT_PH}; do not also pass --ph {ph}"))
+    if protonate:
+        ph = DEFAULT_PH
+    if enumerate_states and ph is None:
+        _fail(ValueError("--enumerate-states needs a pH; add --ph <value> or --protonate"))
 
     settings = Settings(
         backend=backend,
