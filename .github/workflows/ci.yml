@@ -56,12 +56,14 @@ jobs:
   extras-resolve:
     # The mace and fairchem extras are mutually exclusive by design. This proves
     # each one still resolves on its own, so a dependency bump cannot quietly
-    # break an install path nobody exercises until they need it.
+    # break an install path nobody exercises until they need it. `all` is here
+    # because it is the one people actually type, and `names` because nothing
+    # else in the matrix would notice if it broke.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        extra: [mace, fairchem]
+        extra: [mace, fairchem, names, all]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
