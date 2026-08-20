@@ -109,6 +109,9 @@ def depict(
     options.addStereoAnnotation = True
     options.highlightRadius = 0.35
     options.bondLineWidth = 2
+    # Index numbers and R/S annotations sit outside the atoms they belong to,
+    # and the default margin is tight enough to clip them on a wide molecule.
+    options.padding = 0.08
     if dark:
         options.setBackgroundColour((0, 0, 0, 0))
         _use_dark_palette(options)

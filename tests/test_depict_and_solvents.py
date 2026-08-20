@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from ligand3d.depict import depict, depict_molblock
@@ -158,3 +160,48 @@ class TestSolvents:
             MinimizeJob(mol=mol, conf_id=0, solvent=solvent, max_steps=5)
         )
         assert result.energy < 0
+
+
+class TestTheWholeMoleculeIsVisible:
+    """The preview was cropping anything wider than its box was tall.
+
+    The drawing is produced server-side at a requested pixel size and then
+    scaled by CSS. Sizing it by width alone let a wide molecule overflow the
+    panel's height and get clipped, with no indication that anything was
+    missing. Two things have to hold: the SVG must carry a viewBox so the
+    browser can letterbox it, and everything drawn must lie inside that box.
+    """
+
+    WIDE = "CCCCCCCCCCCCCCCC(=O)OC[C@H](O)CO"
+    FUSED = "c1ccc2c(c1)ccc1c2ccc2c1cccc2"
+
+    def _svg(self, smiles, width, height):
+        from ligand3d.depict import depict
+        from ligand3d.molecule import from_smiles
+
+        return depict(from_smiles(smiles), width=width, height=height).svg
+
+    @pytest.mark.parametrize("size", [(700, 200), (460, 290), (300, 400), (240, 160)])
+    @pytest.mark.parametrize("smiles_key", ["WIDE", "FUSED"])
+    def test_nothing_is_drawn_outside_the_canvas(self, size, smiles_key):
+        width, height = size
+        svg = self._svg(getattr(self, smiles_key), width, height)
+
+        xs = [float(x) for x in re.findall(r"[ML] (-?[\d.]+),", svg)]
+        ys = [float(y) for y in re.findall(r"[ML] -?[\d.]+,(-?[\d.]+)", svg)]
+        assert xs and ys, "nothing was drawn"
+        assert 0 <= min(xs) and max(xs) <= width, f"x out of {width}: {min(xs)}..{max(xs)}"
+        assert 0 <= min(ys) and max(ys) <= height, f"y out of {height}: {min(ys)}..{max(ys)}"
+
+    @pytest.mark.parametrize("size", [(700, 200), (300, 400)])
+    def test_the_viewbox_matches_the_request(self, size):
+        """Without it the browser cannot scale the drawing to fit at all."""
+        width, height = size
+        svg = self._svg(self.WIDE, width, height)
+        assert f"viewBox='0 0 {width} {height}'" in svg
+
+    def test_atom_indices_do_not_push_past_the_edge(self):
+        """Index labels sit outside their atoms, which is what used to clip."""
+        svg = self._svg(self.FUSED, 320, 200)
+        ys = [float(y) for y in re.findall(r"[ML] -?[\d.]+,(-?[\d.]+)", svg)]
+        assert min(ys) >= 0 and max(ys) <= 200

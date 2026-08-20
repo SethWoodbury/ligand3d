@@ -166,13 +166,37 @@
      use, so the column has no dead space at the bottom, but its own preview
      box keeps whatever height it was dragged to. */
   #previewCard { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  /* Fills whatever height the card has. Not resizable itself: shrinking just
+     the drawing only left blank space under it, so the useful handle is the
+     editor's above, which hands its slack to this panel. */
   #previewBox {
     background: var(--soft); border: 1px solid var(--line); border-radius: 6px;
-    display: flex; align-items: center; justify-content: center;
-    min-height: 120px; height: 190px; padding: .3rem; overflow: hidden;
-    position: relative; resize: vertical;
+    flex: 1; min-height: 130px; padding: .3rem; overflow: hidden;
+    position: relative; touch-action: none;
   }
-  #previewBox svg { max-width: 100%; height: auto; display: block; }
+  #previewBox.zoomable { cursor: grab; }
+  #previewBox.grabbing { cursor: grabbing; }
+  #previewStage {
+    width: 100%; height: 100%; transform-origin: 0 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* The SVG carries a viewBox, so 100%/100% with the default
+     preserveAspectRatio letterboxes it — the whole molecule is always visible
+     however the panel is shaped. Sizing by width alone cropped the bottom off
+     anything wider than it was tall. */
+  #previewBox svg { width: 100%; height: 100%; display: block; }
+  #previewZoom {
+    position: absolute; right: .4rem; top: .35rem; display: none; gap: .3rem;
+    align-items: center; font-size: .7rem; color: var(--muted);
+    font-family: ui-monospace, monospace;
+    background: color-mix(in srgb, var(--soft) 82%, transparent);
+    border: 1px solid var(--line); border-radius: 4px; padding: .1rem .35rem;
+  }
+  #previewBox.zoomed #previewZoom { display: flex; }
+  #previewZoom button {
+    border: 0; background: none; color: var(--accent); cursor: pointer;
+    font: inherit; padding: 0; font-weight: 640;
+  }
   #previewStats {
     position: absolute; left: .5rem; bottom: .4rem; pointer-events: none;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -291,7 +315,9 @@
       </div>
       <div id="importMsg"></div>
       <div id="sketchWrap"><div id="sketchHost"></div></div>
-      <div class="grip">drag the bottom-right corner to resize &#8600;</div>
+      <div class="grip">
+        drag the corner to resize &#8600; &nbsp;the panel below takes the rest
+      </div>
       <p class="tip" id="stereoTip">
         <b>Wedges and dashes:</b> pick the wedge-bond tool, then click a bond for a solid
         wedge and <b>click the same bond again for a dashed (hashed) bond</b> — the tool
@@ -310,8 +336,13 @@
         </label>
       </div>
       <div id="previewBox">
-        <span style="color:var(--muted);font-size:.78rem">draw something to see it here</span>
-        <div id="previewStats" hidden></div>
+        <div id="previewStage">
+          <span style="color:var(--muted);font-size:.78rem">draw something to see it here</span>
+        </div>
+        <div id="previewZoom">
+          <span id="previewZoomLevel">100%</span>
+          <button type="button" id="previewReset" title="back to fit">reset</button>
+        </div>
       </div>
       <div class="keyrow">
         <span><i class="dot" style="background:#f28c26"></i>needs a configuration</span>
@@ -651,7 +682,6 @@ function loadLayout() {
   try { saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"); } catch (e) { saved = {}; }
   if (saved.split) document.documentElement.style.setProperty("--split", saved.split + "%");
   if (saved.sketch) el("sketchWrap").style.height = saved.sketch + "px";
-  if (saved.preview) el("previewBox").style.height = saved.preview + "px";
 }
 
 let saveTimer = null;
@@ -663,7 +693,6 @@ function saveLayout() {
       localStorage.setItem(LAYOUT_KEY, JSON.stringify({
         split: split ? parseFloat(split) : undefined,
         sketch: Math.round(el("sketchWrap").getBoundingClientRect().height),
-        preview: Math.round(el("previewBox").getBoundingClientRect().height),
       }));
     } catch (e) { /* private browsing, quota — the layout just will not persist */ }
   }, 300);
@@ -720,7 +749,10 @@ function resizeEditor() {
 function watchResizes() {
   if (typeof ResizeObserver === "undefined") return;
   new ResizeObserver(() => { resizeEditor(); saveLayout(); }).observe(el("sketchWrap"));
-  new ResizeObserver(saveLayout).observe(el("previewBox"));
+  // The preview is not resized directly — it takes whatever the editor leaves.
+  // Redrawing on that change matters because the layout is computed server-side
+  // for a given box shape, so a stale drawing is laid out for the old one.
+  new ResizeObserver(() => schedulePreview()).observe(el("previewBox"));
 }
 
 /* Import text comes from what someone typed and from PubChem, and lands in
@@ -828,6 +860,92 @@ el("importQuery").addEventListener("keydown", (e) => {
 let previewTimer = null;
 let previewSeq = 0;
 
+/* Zoom and pan over the drawing. The molecule always starts fitted — the SVG's
+   viewBox does that — so this is only ever for looking closer at a crowded
+   region, which is exactly when atom numbers stop being legible. */
+const view = { k: 1, x: 0, y: 0 };
+const MIN_ZOOM = 1;      /* never below fit: the whole molecule stays reachable */
+const MAX_ZOOM = 12;
+
+function applyPreviewView() {
+  const stage = el("previewStage");
+  const box = el("previewBox");
+  stage.style.transform =
+    "translate(" + view.x + "px, " + view.y + "px) scale(" + view.k + ")";
+  box.classList.toggle("zoomed", view.k > 1.001);
+  el("previewZoomLevel").textContent = Math.round(view.k * 100) + "%";
+}
+
+function resetPreviewView() {
+  view.k = 1; view.x = 0; view.y = 0;
+  applyPreviewView();
+}
+
+/* Panning is clamped so the drawing cannot be pushed out of sight — at fit
+   there is nowhere to go, and zoomed in you can reach every edge and no
+   further. */
+function clampPreviewView() {
+  const box = el("previewBox").getBoundingClientRect();
+  const slackX = box.width * (view.k - 1);
+  const slackY = box.height * (view.k - 1);
+  view.x = Math.min(0, Math.max(-slackX, view.x));
+  view.y = Math.min(0, Math.max(-slackY, view.y));
+}
+
+function zoomPreview(factor, originX, originY) {
+  const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.k * factor));
+  if (next === view.k) return;
+  // Keep the point under the cursor where it is.
+  const ratio = next / view.k;
+  view.x = originX - (originX - view.x) * ratio;
+  view.y = originY - (originY - view.y) * ratio;
+  view.k = next;
+  clampPreviewView();
+  applyPreviewView();
+}
+
+function setupPreviewZoom() {
+  const box = el("previewBox");
+
+  box.addEventListener("wheel", (e) => {
+    if (!box.classList.contains("zoomable")) return;
+    e.preventDefault();
+    const r = box.getBoundingClientRect();
+    zoomPreview(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  box.addEventListener("pointerdown", (e) => {
+    if (!box.classList.contains("zoomable") || e.button !== 0) return;
+    if (e.target.closest("#previewZoom")) return;   // the reset button
+    e.preventDefault();
+    box.setPointerCapture(e.pointerId);
+    box.classList.add("grabbing");
+    const from = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+
+    const move = (ev) => {
+      view.x = from.vx + (ev.clientX - from.x);
+      view.y = from.vy + (ev.clientY - from.y);
+      clampPreviewView();
+      applyPreviewView();
+    };
+    const up = () => {
+      box.classList.remove("grabbing");
+      box.removeEventListener("pointermove", move);
+      box.removeEventListener("pointerup", up);
+      box.removeEventListener("pointercancel", up);
+    };
+    box.addEventListener("pointermove", move);
+    box.addEventListener("pointerup", up);
+    box.addEventListener("pointercancel", up);
+  });
+
+  box.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    resetPreviewView();
+  });
+  el("previewReset").addEventListener("click", resetPreviewView);
+}
+
 function schedulePreview() {
   clearTimeout(previewTimer);
   previewTimer = setTimeout(refreshPreview, 220);
@@ -839,13 +957,16 @@ function prefersDark() {
 
 async function refreshPreview() {
   const box = el("previewBox");
+  const stage = el("previewStage");
   const msg = el("previewMsg");
   const smi = el("previewSmiles");
   const molblock = await readMolblock();
 
   if (!molblock || !molblock.trim()) {
-    box.innerHTML = '<span style="color:var(--muted);font-size:.78rem">' +
+    stage.innerHTML = '<span style="color:var(--muted);font-size:.78rem">' +
       "draw something to see it here</span>";
+    box.classList.remove("zoomable");
+    resetPreviewView();
     msg.textContent = ""; smi.textContent = "";
     return;
   }
@@ -860,7 +981,11 @@ async function refreshPreview() {
         molblock: molblock,
         dark: prefersDark(),
         show_indices: el("showIndices").checked,
-        width: 460, height: 290,
+        // The panel's real shape, so RDKit lays the molecule out for the space
+        // it will actually occupy rather than a fixed 460x290 that then has to
+        // be letterboxed into something a different shape.
+        width: Math.max(240, Math.round(box.clientWidth) || 460),
+        height: Math.max(160, Math.round(box.clientHeight) || 290),
       }),
     })).json();
   } catch (e) {
@@ -881,7 +1006,9 @@ async function refreshPreview() {
     return;
   }
 
-  box.innerHTML = data.svg;
+  stage.innerHTML = data.svg;
+  box.classList.add("zoomable");
+  resetPreviewView();
 
   // formula / MW / charge, tucked into the bottom-left of the drawing
   const stats = document.createElement("div");
@@ -914,8 +1041,10 @@ async function refreshPreview() {
       (c) => "atom " + c.atom + " = " + c.code).join(", "));
   }
   if (!lines.length && (data.constrained_centers || []).length) {
-    lines.push("the grey atoms look stereogenic but the ring system fixes them, " +
-               "so nothing is ambiguous");
+    // The server says why they are grey — a ring constraint and a resonance-
+    // averaged phosphate are both grey but for entirely different reasons.
+    (data.notes || []).filter((n) => n.indexOf("grey") !== -1)
+      .forEach((n) => lines.push(esc(n)));
   }
   msg.innerHTML = lines.join("<br>");
 }
@@ -1460,6 +1589,7 @@ el("clearBtn").addEventListener("click", clearCanvas);
 // visibly jump from the defaults to what was chosen last time.
 loadLayout();
 setupSplitter();
+setupPreviewZoom();
 
 init();
 </script>
