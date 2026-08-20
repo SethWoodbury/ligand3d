@@ -474,14 +474,33 @@ def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
     job.say(f"log {submitted.stdout}")
 
     last = ""
+    delay = 5.0
+    failures = 0
     while True:
-        state = job_state(submitted.job_id)
+        try:
+            state = job_state(submitted.job_id)
+        except Ligand3DError:
+            # squeue and sacct both hiccup under load. The job is almost
+            # certainly fine, so keep watching rather than declaring failure —
+            # but do not do it forever in silence.
+            failures += 1
+            if failures > 20:
+                raise
+            time.sleep(delay)
+            continue
+        failures = 0
+
         if state != last:
             job.say(f"job {submitted.job_id} is {state}")
+            if state == "PENDING":
+                job.say("waiting for a node — this can take a while when the cluster is busy")
             last = state
         if state in TERMINAL_SLURM_STATES:
             break
-        time.sleep(5)
+        time.sleep(delay)
+        # A job can sit in the queue for hours; back off so a long wait is not
+        # thousands of squeue calls.
+        delay = min(delay * 1.25, 60.0)
 
     if last != "COMPLETED":
         tail = _tail(submitted.stderr, 12)

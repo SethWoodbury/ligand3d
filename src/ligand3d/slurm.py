@@ -474,16 +474,32 @@ def job_state(job_id: int) -> str:
     return "UNKNOWN"
 
 
-def wait_for(job_id: int, poll_seconds: float = 20.0, timeout: float | None = None) -> str:
-    """Block until the job leaves the queue. Returns its final state."""
+def wait_for(job_id: int, poll_seconds: float = 15.0, timeout: float | None = None) -> str:
+    """Block until the job leaves the queue. Returns its final state.
+
+    Transient failures of squeue and sacct are tolerated: a scheduler too busy
+    to answer is not the same as a job that died, and treating it that way
+    would abandon a run that is going fine.
+    """
     started = time.monotonic()
+    delay = poll_seconds
+    failures = 0
     while True:
-        state = job_state(job_id)
+        try:
+            state = job_state(job_id)
+            failures = 0
+        except SlurmError:
+            failures += 1
+            if failures > 20:
+                raise
+            state = "UNKNOWN"
+
         if state in TERMINAL_STATES:
             return state
         if timeout is not None and time.monotonic() - started > timeout:
             raise SlurmError(f"job {job_id} still {state} after {timeout:g}s")
-        time.sleep(poll_seconds)
+        time.sleep(delay)
+        delay = min(delay * 1.25, 60.0)
 
 
 def build_payload(molecule, settings, output: Path) -> dict[str, Any]:

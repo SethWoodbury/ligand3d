@@ -295,3 +295,56 @@ class TestJobName:
 
         for name in ("LIG", "my ligand", "////", "ünïcödé", "a" * 80):
             assert SlurmConfig(job_name=job_name_for(name)).check() == []
+
+
+class TestWaiting:
+    """A scheduler too busy to answer is not a job that died."""
+
+    def _no_sleeping(self, monkeypatch):
+        monkeypatch.setattr("ligand3d.slurm.time.sleep", lambda _s: None)
+
+    def test_returns_the_final_state(self, monkeypatch):
+        from ligand3d import slurm
+
+        self._no_sleeping(monkeypatch)
+        states = iter(["PENDING", "RUNNING", "COMPLETED"])
+        monkeypatch.setattr(slurm, "job_state", lambda _id: next(states))
+        assert slurm.wait_for(1) == "COMPLETED"
+
+    def test_rides_out_a_transient_query_failure(self, monkeypatch):
+        from ligand3d import slurm
+
+        self._no_sleeping(monkeypatch)
+        answers = ["RUNNING", SlurmError("squeue timed out"), "RUNNING", "COMPLETED"]
+        calls = iter(answers)
+
+        def flaky(_id):
+            value = next(calls)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        monkeypatch.setattr(slurm, "job_state", flaky)
+        assert slurm.wait_for(1) == "COMPLETED"
+
+    def test_gives_up_when_the_scheduler_never_answers(self, monkeypatch):
+        from ligand3d import slurm
+
+        self._no_sleeping(monkeypatch)
+
+        def always_fails(_id):
+            raise SlurmError("scheduler is gone")
+
+        monkeypatch.setattr(slurm, "job_state", always_fails)
+        with pytest.raises(SlurmError, match="scheduler is gone"):
+            slurm.wait_for(1)
+
+    def test_honours_a_timeout(self, monkeypatch):
+        from ligand3d import slurm
+
+        self._no_sleeping(monkeypatch)
+        clock = iter([0.0, 10.0, 9999.0])
+        monkeypatch.setattr(slurm.time, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(slurm, "job_state", lambda _id: "PENDING")
+        with pytest.raises(SlurmError, match="still PENDING"):
+            slurm.wait_for(1, timeout=60)
