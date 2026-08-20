@@ -646,13 +646,32 @@ def doctor() -> None:
         ("dimorphite_dl", "pH-based protonation"),
         ("torch", "machine-learned potentials"),
         ("mace", "MACE potentials"),
+        ("graph_longrange", "MACE-POLAR long-range electrostatics"),
         ("aimnet", "AIMNet2 potential"),
+        ("py2opsin", "offline IUPAC name lookup for 'fetch'"),
     ):
         import importlib.util
 
         present = importlib.util.find_spec(module) is not None
         mark = "[green]✓[/green]" if present else "[yellow]✗[/yellow]"
         console.print(f"  {mark} {module} [dim]— {why}[/dim]")
+
+    console.print("\n[bold]molecule lookup[/bold]")
+    from .resolve import opsin_available
+
+    if opsin_available():
+        console.print(
+            "  [green]✓[/green] systematic names, offline [dim]— OPSIN and java are both here[/dim]"
+        )
+    else:
+        console.print(
+            "  [yellow]✗[/yellow] systematic names [dim]— needs 'pip install ligand3d[names]' "
+            "and a java on PATH[/dim]"
+        )
+    console.print(
+        "  [dim]trivial and trade names are looked up in PubChem, which needs "
+        "the network.[/dim]"
+    )
 
     # Only mentioned where it would work, so this stays quiet off the cluster.
     from .sketch.session import slurm_status
@@ -787,6 +806,8 @@ def models(
             for label, value in (
                 ("family", method.family),
                 ("trained on", method.training),
+                ("reproduces", method.reference),
+                ("error", method.error),
                 ("accuracy", method.accuracy),
                 ("elements", method.elements),
                 ("notes", method.notes),
@@ -800,6 +821,13 @@ def models(
             if not method.ready and method.hint:
                 console.print(f"    [dim]{escape(method.hint)}[/dim]")
 
+        console.print(
+            "\n[dim]'error' is a literature figure against the reference above it, not a "
+            "measurement made here, and it is always in-domain: the error on held-out "
+            "data from the same distribution as the training set. A molecule unlike "
+            "anything in that distribution can be far worse with no warning.[/dim]"
+        )
+
     if report.weight_roots:
         console.print("\n[bold]weights read from[/bold]")
         for root in report.weight_roots:
@@ -808,6 +836,101 @@ def models(
         console.print("\n[bold]known but not loadable[/bold]")
         for key, why in report.unsupported.items():
             console.print(f"  [yellow]-[/yellow] {key}: [dim]{escape(why)}[/dim]")
+
+
+@app.command()
+def fetch(
+    query: Optional[str] = typer.Argument(
+        None,
+        help="A name, SMILES, InChI, or PubChem CID. Prefix with smiles:, inchi:, "
+        "name:, or cid: to force one route.",
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Write the 2D structure to a .sdf or .mol file."
+    ),
+    smiles_only: bool = typer.Option(
+        False, "--smiles", help="Print only the SMILES, for piping into build."
+    ),
+    offline: bool = typer.Option(
+        False, "--offline", help="Do not query PubChem; names must be systematic."
+    ),
+    templates: bool = typer.Option(
+        False, "--templates", help="List the built-in scaffolds and exit."
+    ),
+    timeout: float = typer.Option(12.0, "--timeout", help="Seconds to wait on PubChem."),
+) -> None:
+    """Look up a molecule by name and get a structure to start from.
+
+    Systematic names are derived offline by OPSIN; trivial and trade names are
+    looked up in PubChem, which needs the network.
+
+        ligand3d fetch "3-Cyano-7-ethoxycoumarin"
+        ligand3d build "$(ligand3d fetch aspirin --smiles)" -o aspirin.cif
+    """
+    from .resolve import ResolveError, opsin_available, resolve, template, template_list
+
+    if templates:
+        table = Table(title="built-in scaffolds", header_style="bold")
+        table.add_column("name")
+        table.add_column("SMILES")
+        table.add_column("what it is")
+        for entry in template_list():
+            table.add_row(entry["name"], entry["smiles"], entry["note"])
+        console.print(table)
+        console.print("\n[dim]ligand3d fetch <name> loads one of these too.[/dim]")
+        return
+
+    if not query:
+        _fail(ValueError("give a name, SMILES, InChI, or CID — or use --templates"))
+        return
+
+    try:
+        known = {entry["name"] for entry in template_list()}
+        found = template(query) if query.strip().lower() in known else resolve(
+            query, allow_network=not offline, timeout=timeout
+        )
+    except ResolveError as exc:
+        _fail(exc)
+        return
+
+    if smiles_only:
+        console.print(found.smiles, highlight=False, soft_wrap=True)
+        return
+
+    console.print(f"[bold]{found.formula}[/bold]  {escape(found.smiles)}")
+    if found.name and found.name.lower() != found.query.strip().lower():
+        console.print(f"  · known as [cyan]{escape(found.name)}[/cyan]")
+    console.print(f"  · {found.provenance}")
+    for note in found.notes:
+        console.print(f"  · {note}")
+    if found.url:
+        console.print(f"  · {found.url}", highlight=False, soft_wrap=True)
+    if found.source == "opsin":
+        console.print(
+            "  [dim]derived from the name itself, so it is what the name says — "
+            "not a database record of a real compound.[/dim]"
+        )
+    elif found.source == "pubchem":
+        console.print(
+            "  [dim]a database match on the name you typed. Check the name above "
+            "is the compound you meant.[/dim]"
+        )
+    if offline and not opsin_available():
+        console.print(
+            "  [yellow]note[/yellow] --offline with no OPSIN leaves only SMILES and InChI."
+        )
+
+    if output is not None:
+        from .molecule import from_smiles
+        from .write import write_2d
+
+        path = write_2d(from_smiles(found.smiles, name=found.name or "LIG"), output)
+        console.print("  [green]wrote:[/green]")
+        console.print(str(path), highlight=False, soft_wrap=True)
+    else:
+        console.print(
+            f"\n  [dim]build it with[/dim] ligand3d build {escape(found.smiles)!r}"
+        )
 
 
 @app.command()

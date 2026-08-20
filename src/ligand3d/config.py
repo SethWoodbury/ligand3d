@@ -88,6 +88,22 @@ class ModelSpec:
     accuracy: str = ""
     notes: str = ""
 
+    reference: str = ""
+    """The level of theory this method reproduces, which is its accuracy ceiling.
+
+    A fitted method cannot be more right than what it was fitted to. Quoting the
+    reference alongside the error is the only way an error bar means anything:
+    "1 kcal/mol" against DFT and "1 kcal/mol" against CCSD(T) are very different
+    claims.
+    """
+    error: str = ""
+    """Reported error against that reference. Literature values, not measured here.
+
+    Always in-domain — the held-out part of the training distribution. A molecule
+    unlike anything in that distribution can be wrong by far more, with no
+    warning, which is the failure mode that matters most for neural potentials.
+    """
+
     def name_padded(self, width: int = 16) -> str:
         return f"{self.key}:".ljust(width + 1)
 

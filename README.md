@@ -12,6 +12,7 @@ ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --backend gfn2 -o gabapentin
 ligand3d build "C[C@@H](O)[C@H](N)C(=O)O" --backend mmff94,gfn2 --confs 20 -o threonine
 ligand3d build "<smiles>" --params --params-code LIG        # + a Rosetta params file
 ligand3d build "<smiles>" --trace --trajectory              # energy per step, and the path
+ligand3d fetch "3-Cyano-7-ethoxycoumarin"  # look a molecule up by name
 ligand3d sketch                        # draw it, then the pipeline runs on what you drew
 ligand3d doctor                        # what's installed, what isn't, and why
 ```
@@ -195,23 +196,28 @@ uv pip install -e ".[xtb,protonation,fairchem]"  # eSEN / UMA / AllScAIP + xTB
 
 Install torch from the CPU index first in both unless you have a GPU.
 
-### MACE-POLAR — a third environment
+### MACE-POLAR — one extra package, no separate environment
 
-MACE-POLAR-1 (S/M/L) models long-range electrostatics that the other MACE models leave
-out, and it does work — all three sizes load and evaluate. It needs two things that are
-not on PyPI: `graph_longrange`, and a **patched MACE fork** that installs *as*
-`mace-torch` and therefore replaces the stock package. So it is a third mutually
-exclusive environment, not something that sits beside `[mace]`.
+MACE-POLAR-1 (S/M/L) models the long-range electrostatics the other MACE models leave out.
+It used to need a patched MACE fork that installed *as* `mace-torch`, which made it a third
+mutually exclusive environment. **That is no longer true:** `mace-torch` 0.3.16 ships
+`PolarMACE` upstream, so POLAR now sits beside every other MACE model in the same
+virtualenv.
 
-On this cluster both sources are in `quantum_cowboy_biochemistry/deps/`:
+One piece is still missing from PyPI — `graph_longrange`, which supplies the
+reciprocal-space sum. On this cluster the source is in `quantum_cowboy_biochemistry/deps/`:
 
 ```bash
-uv venv --python 3.12 .venv-polar && source .venv-polar/bin/activate
-uv pip install torch --index-url https://download.pytorch.org/whl/cpu
-uv pip install <repo>/deps/mace_polar_src <repo>/deps/graph_longrange_src
-uv pip install -e /path/to/ligand3d
+uv pip install --no-deps <repo>/deps/graph_longrange_src
 ligand3d build "<smiles>" --backend mmff94,mace-polar
 ```
+
+`--no-deps` is deliberate: its requirements (`torch`, `e3nn==0.4.4`, `numpy`, `ase`) are
+already satisfied by the `[mace]` extra, and letting it re-resolve them risks moving the
+e3nn pin that the whole MACE side depends on.
+
+`ligand3d doctor` reports `graph_longrange` on its own line, so a missing POLAR is one
+lookup rather than a puzzle.
 
 ### Still not usable
 
@@ -368,6 +374,48 @@ multiplies the minimization column by the number of conformers, which is exactly
 conformers through MACE-OFF would be seven minutes to rediscover what MMFF94 found in a
 quarter of a second.
 
+## How accurate is any of this
+
+`ligand3d models -v` prints, for every method, what it reproduces and how close it
+reportedly gets. The methods page in the browser shows the same thing. Both are worth
+reading before trusting a number, and both come with the same three caveats.
+
+**An error bar means nothing without its reference.** A fitted method cannot be more right
+than the thing it was fitted to. MACE-OFF reproduces ωB97M-D3(BJ)/def2-TZVPPD to about
+1 kcal/mol — but that is agreement with *that functional*, which is itself off by a few
+kcal/mol for some of the chemistry you will point this at. "1 kcal/mol against DFT" and
+"1 kcal/mol against CCSD(T)" are different claims.
+
+| method | reproduces | reported error |
+|---|---|---|
+| `uff` | rules, no single reference | geometries ~0.05 Å; conformer energies often several kcal/mol out |
+| `mmff94` | MP2/6-31G* + experiment | bond lengths ~0.01–0.02 Å; conformer energies ~1 kcal/mol where parameterized |
+| `gfnff` | GFN2-xTB geometries | heavy-atom RMSD ~0.1–0.3 Å vs DFT |
+| `gfn2` | DFT (the GFN2 fit set) | bond lengths ~0.01–0.02 Å; conformer and reaction energies ~2–4 kcal/mol |
+| `aimnet2` | ωB97M-D3/def2-TZVPP | ~1 kcal/mol energies, ~1–2 kcal/mol/Å forces |
+| `mace-off*` | ωB97M-D3(BJ)/def2-TZVPPD (SPICE) | ~1 kcal/mol energies, ~1–2 kcal/mol/Å forces, neutral organics |
+| `mace-omol`, `esen`, `uma*` | ωB97M-V/def2-TZVPD (OMol25) | sub-kcal/mol in domain; covers charged and open-shell |
+| `mace-mp` | PBE / r2SCAN periodic DFT | tens of meV/Å on solids; **not fitted for molecular conformers** |
+| `mace-polar*` | a polarizable set with explicit long-range terms | beta; no settled benchmark to quote |
+
+**Every one of those figures is in-domain.** They are errors on held-out data drawn from the
+same distribution as the training set. That is what papers report and it is the number most
+likely to mislead you, because a neural potential handed something unlike its training data
+does not refuse and does not widen its error bar — it returns a confident number that can be
+wrong by an order of magnitude. This is why ligand3d checks elements and total charge
+*before* running a model rather than interpreting the result afterwards.
+
+**Force error and energy error are different things**, and a method can be good at one and
+poor at the other. Forces decide whether a minimization lands in the right geometry; energies
+decide whether you can trust one conformer ranked above another. For picking a conformer, the
+energy column binds.
+
+The practical reading: for a **starting geometry**, everything in that table is fine and
+`mmff94` is 4 ms. For **ranking conformers within a few kcal/mol**, you need `gfn2` or a
+neural potential whose training set actually contains your chemistry. For anything charged,
+you need a method with a charge channel at all — which is a capability question, not an
+accuracy one, and ligand3d refuses those pairings rather than answering them.
+
 ## Choosing a backend
 
 - **Default, and fine for most work** — `mmff94`. Four milliseconds, and geometry that is
@@ -496,8 +544,12 @@ rather than through a shell, so it cannot be quoted around:
 - `--slurm-dir` pointed at a directory whose `src/` is not a previous ligand3d snapshot is
   rejected, instead of deleting it to make room for one.
 
-Point at different images with `LIGAND3D_SIF_MACE` and `LIGAND3D_SIF_FAIRCHEM`, and at a
-different account with `LIGAND3D_SLURM_ACCOUNT`.
+The default images live under `/net/software/containers/users/woodbuse/`, which is
+world-readable on this cluster — anyone in the lab can submit against them, they just cannot
+edit them, which is the right way round. Point at different images with `LIGAND3D_SIF_MACE`
+and `LIGAND3D_SIF_FAIRCHEM`, and at a different account with `LIGAND3D_SLURM_ACCOUNT`.
+`ligand3d slurm` prints which images it resolved, so a wrong path shows up before a job
+does.
 
 ## Protonation
 
@@ -572,11 +624,73 @@ minimization time: mmff94 0.29s, gfn2 0.45s
 Running both methods over all 57 would have cost about thirty seconds of GFN2 to rediscover
 shapes MMFF94 already found.
 
+## Looking a molecule up by name
+
+Drawing a fused polycyclic by hand is slow and easy to get subtly wrong, and most molecules
+worth building already have a name. `ligand3d fetch` turns a name, SMILES, InChI, or PubChem
+CID into a structure; in the sketcher there is an import box above the canvas that drops the
+result straight onto it, so it becomes a scaffold you edit rather than a drawing you start
+from nothing.
+
+```bash
+ligand3d fetch "3-Cyano-7-ethoxycoumarin"       # systematic name, resolved offline
+ligand3d fetch aspirin                          # trivial name, via PubChem
+ligand3d fetch cid:2244                         # straight to a PubChem record
+ligand3d fetch "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3"
+ligand3d fetch coumarin -o scaffold.sdf         # a 2D file to open in anything
+ligand3d fetch --templates                      # the built-in scaffolds
+ligand3d build "$(ligand3d fetch aspirin --smiles)" -o aspirin.cif
+```
+
+### Three routes, and why it matters which one answered
+
+| route | what it handles | needs |
+|---|---|---|
+| parsing | SMILES, InChI | nothing |
+| **OPSIN** | systematic IUPAC names | `py2opsin` and a `java` |
+| **PubChem** | trivial names, trade names, CIDs | the network |
+
+These are complements, not fallbacks for each other, and `fetch` always says which one
+answered:
+
+```
+$ ligand3d fetch "3-Cyano-7-ethoxycoumarin"
+C12H9NO3  CCOc1ccc2cc(C#N)c(=O)oc2c1
+  · derived from the name by OPSIN, offline, from IUPAC rules
+```
+
+OPSIN is a **grammar for the naming rules**, not a database. It parses names nobody has ever
+catalogued, works with no network, and returns exactly what the name says — so it cannot
+hand you the wrong compound, but it knows nothing about `aspirin`, because that name is not
+derivable from anything.
+
+PubChem is the opposite: a **lookup**, so it covers every trivial and trade name, and it can
+quietly give you something you did not mean. Searching the name `CO` returns cobalt, not
+carbon monoxide. That is why the matched title is always printed — read it.
+
+For the record, [InChI](https://github.com/IUPAC-InChI/InChI) does not help here. It is a
+structure *serialization*: it turns a structure into a canonical string and back. An InChI
+string is accepted as input, but InChI cannot turn `aspirin` into a structure. OPSIN and
+PubChem are the two things that do.
+
+### Scaffolds
+
+`ligand3d fetch --templates` lists eighteen starting points — benzene, piperidine,
+morpholine, indole, coumarin, purine, adamantane, the gonane skeleton, and so on — also
+available from the dropdown next to the import box. They exist for when the point is to draw
+a derivative, so the list is deliberately short: a starting point, not a compound library.
+
+Anything imported is **2D on purpose**. It is a drawing to edit, and writing it out with
+3D-looking coordinates would invite someone to mistake a layout for a geometry. The
+embedding happens later, in `build`, from whatever you edited it into.
+
 ## Drawing
 
 `ligand3d sketch` starts a local server, opens a browser, and stays up. Draw a structure,
 set the options, press **Build**, read the run log, clear the canvas, and draw the next
-one — no reloading between molecules.
+one — no reloading between molecules. There is an import box above the canvas (see
+[Looking a molecule up by name](#looking-a-molecule-up-by-name)) for starting from a
+named compound or a scaffold instead of an empty sheet.
 
 ```bash
 ligand3d sketch                          # output goes to the current directory

@@ -86,6 +86,16 @@
   .dl dd { margin: 0; word-break: break-word; }
   .dl dd.path { font-family: ui-monospace, monospace; font-size: .76rem; }
 
+  .caveat {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+    padding: .55rem .85rem; margin: 0 0 1rem; font-size: .83rem; max-width: 60rem;
+  }
+  .caveat summary {
+    cursor: pointer; font-weight: 620; color: var(--fg); font-size: .82rem;
+  }
+  .caveat p { color: var(--muted); margin: .6rem 0 0; }
+  .caveat b { color: var(--fg); }
+
   .roots {
     background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
     padding: .7rem .85rem; margin-top: 1.4rem; font-size: .83rem;
@@ -112,8 +122,37 @@
     <em>explicit</em> means the method consumes the total molecular charge as an input;
     <em>implicit</em> means it sees only atoms and positions, so a carboxylate and a
     neutral acid that lost a proton look identical to it. ligand3d refuses the second
-    pairing rather than answering it. Click any row for detail.
+    pairing rather than answering it. Click any row for <b>reproduces</b> and
+    <b>reported error</b> — what each method is aiming at, and how close it gets.
   </p>
+
+  <details class="caveat">
+    <summary>How to read the accuracy figures</summary>
+    <p>
+      A fitted method cannot be more right than the thing it was fitted to, so an error
+      bar only means something next to its reference. <em>1 kcal/mol against DFT</em> and
+      <em>1 kcal/mol against CCSD(T)</em> are very different claims, and DFT itself is
+      wrong by a few kcal/mol for some of the chemistry you will point this at.
+    </p>
+    <p>
+      Every number here is <b>in-domain</b>: the error on held-out data drawn from the
+      same distribution as the training set. That is what papers report, and it is the
+      figure most likely to mislead you. A neural potential given a molecule unlike
+      anything it was trained on does not refuse or widen its error bar — it returns a
+      confident number that can be wrong by an order of magnitude. This is why ligand3d
+      checks elements and charge before running a model rather than after.
+    </p>
+    <p>
+      Force error and energy error are different things and a method can be good at one
+      and poor at the other. Forces decide whether a minimization lands in the right
+      geometry; energies decide whether you can trust one conformer ranked above another.
+      For picking a conformer, the energy figure is the one that binds.
+    </p>
+    <p>
+      These are literature figures, not measurements made here. The <b>speed</b> column is
+      the opposite: measured on this machine unless it says estimate.
+    </p>
+  </details>
 
   <div class="controls">
     <input type="text" id="filter" placeholder="filter by name, family, or note…" spellcheck="false">
@@ -183,6 +222,8 @@ function detailRow(m) {
     (cls ? ' class="' + cls + '"' : "") + ">" + esc(v) + "</dd>"); };
   add("description", m.description);
   add("trained on", m.training);
+  add("reproduces", m.reference);
+  add("reported error", m.error);
   add("accuracy", m.accuracy);
   add("elements", m.elements);
   add("notes", m.notes);

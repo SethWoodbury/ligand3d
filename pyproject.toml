@@ -48,6 +48,11 @@ fairchem = [
 aimnet = ["ase>=3.22", "torch>=2.0"]
 mlff = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]  # alias for [mace]
 protonation = ["dimorphite-dl>=2.0"]
+# Offline IUPAC name parsing for `ligand3d fetch` and the sketcher's import box.
+# py2opsin is a thin wrapper that ships the OPSIN jar and shells out to `java`,
+# so a JRE has to be on PATH; without it the PubChem route still works, and
+# without either, SMILES and InChI still do.
+names = ["py2opsin>=1.2"]
 # Everything that can coexist: the MACE side of the MLFF split.
 all = [
     "tblite>=0.4",
@@ -55,6 +60,7 @@ all = [
     "torch>=2.0",
     "mace-torch>=0.3.9",
     "dimorphite-dl>=2.0",
+    "py2opsin>=1.2",
 ]
 dev = ["pytest>=7.0", "pytest-cov>=4.0"]
 
@@ -82,8 +88,11 @@ packages = ["src/ligand3d"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
 markers = [
     "backend: test requires an optional minimization backend",
     "slow: test takes more than a few seconds",
+    "network: test calls a third-party service; deselected by default",
 ]
+# PubChem being slow or down is not a reason for the suite to fail, so the
+# tests that talk to it are opt-in: `pytest -m network`.
+addopts = "-q --strict-markers -m 'not network'"

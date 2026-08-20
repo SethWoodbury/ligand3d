@@ -36,6 +36,10 @@ class MethodInfo:
     load_seconds: float = 0.0
     memory: str = ""
     accuracy: str = ""
+    reference: str = ""
+    """The level of theory this method reproduces — its accuracy ceiling."""
+    error: str = ""
+    """Reported in-domain error against that reference. Literature, not measured."""
     training: str = ""
     elements: str = "unrestricted"
     notes: str = ""
@@ -130,6 +134,101 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
 }
 
 
+# What each method is trying to reproduce, and how close it reportedly gets.
+#
+# These are LITERATURE figures, not measurements made here, and every one of
+# them is an in-domain number: the error on held-out data drawn from the same
+# distribution as the training set. That is the number papers report and it is
+# the number that misleads most, because a molecule unlike anything in the
+# training distribution can be wrong by far more with no warning at all.
+#
+# Two errors are quoted where both matter. Force error governs whether a
+# minimization settles in the right geometry; energy error governs whether you
+# can trust one conformer being ranked above another. A method can be good at
+# one and poor at the other.
+_ACCURACY: dict[str, tuple[str, str]] = {
+    # --- classical ------------------------------------------------------
+    "mmff94": (
+        "MP2/6-31G* geometries plus experimental data (Halgren's fit set)",
+        "bond lengths within ~0.01-0.02 A of the fit; conformer energies "
+        "roughly 1 kcal/mol for organics the parameters cover, and arbitrarily "
+        "wrong for chemistry they do not",
+    ),
+    "uff": (
+        "no single reference; parameters are rules from element and hybridization",
+        "geometries usually within ~0.05 A; conformer energies routinely off by "
+        "several kcal/mol. Use it for a starting geometry, never for ranking",
+    ),
+    # --- semi-empirical --------------------------------------------------
+    "gfnff": (
+        "GFN2-xTB geometries",
+        "heavy-atom RMSD typically ~0.1-0.3 A against DFT for organics; "
+        "energetics much rougher than its geometries",
+    ),
+    "gfn1": (
+        "DFT reference data (the GFN1 fit set)",
+        "geometries close to GFN2; reaction and conformer energies typically "
+        "3-5 kcal/mol, superseded by GFN2 for most purposes",
+    ),
+    "gfn2": (
+        "DFT reference data (PBE0-D3-like, the GFN2 fit set)",
+        "bond lengths ~0.01-0.02 A from DFT; conformer and reaction energies "
+        "typically 2-4 kcal/mol. Broadly reliable across the periodic table",
+    ),
+    # --- neural ----------------------------------------------------------
+    "aimnet2": (
+        "wB97M-D3/def2-TZVPP",
+        "roughly 1 kcal/mol on energies and ~1-2 kcal/mol/A on forces for "
+        "in-domain organics, including charged ones",
+    ),
+}
+
+# Neural potentials inherit their ceiling from the dataset they were fitted to,
+# so the reference is recorded once per dataset rather than once per checkpoint.
+_DATASET_ACCURACY: dict[str, tuple[str, str]] = {
+    "spice": (
+        "wB97M-D3(BJ)/def2-TZVPPD (SPICE)",
+        "around 1 kcal/mol on energies and ~1-2 kcal/mol/A on forces for "
+        "neutral organics; larger checkpoints sit at the better end",
+    ),
+    "omol": (
+        "wB97M-V/def2-TZVPD (OMol25)",
+        "sub-kcal/mol energies and forces on in-domain organics; the dataset "
+        "includes charged and open-shell species, which most others do not",
+    ),
+    "materials": (
+        "PBE / r2SCAN periodic DFT (MatPES, OMat, MPtrj)",
+        "force errors of tens of meV/A on solids. It was never fitted to "
+        "molecular conformer energies and should not be trusted for them",
+    ),
+    "multihead": (
+        "several at once, one per head — the selected head decides",
+        "comparable to the single-dataset model behind whichever head is "
+        "selected; the omol head for charged-capable chemistry, spice_wB97M "
+        "for neutral organics",
+    ),
+    "polar": (
+        "a polarizable dataset carrying explicit long-range electrostatics",
+        "beta release, and no settled benchmark to quote. Its reason to exist "
+        "is the physics the others drop: MACE and friends truncate at a cutoff, "
+        "so a charged or strongly polar group stops being felt a few angstroms "
+        "away. POLAR keeps that term, which matters for zwitterions and salt "
+        "bridges and costs several times the runtime",
+    ),
+}
+
+_MODEL_DATASET: dict[str, str] = {
+    "mace-off": "spice", "mace-off-small": "spice", "mace-off-large": "spice",
+    "mace-off-24": "spice", "mace-mh-spice": "spice",
+    "mace-omol": "omol", "esen": "omol", "esen-sm-direct": "omol",
+    "esen-md-direct": "omol", "allscaip": "omol", "allscaip-direct": "omol",
+    "uma-s": "omol", "uma-s-1p2": "omol", "uma-sm": "omol", "uma-m": "omol",
+    "mace-mp": "materials",
+    "mace-mh": "multihead", "mace-mh-1": "multihead",
+    "mace-polar": "polar", "mace-polar-s": "polar", "mace-polar-l": "polar",
+}
+
+
 def _element_summary(caps) -> str:
     from rdkit import Chem
 
@@ -179,6 +278,17 @@ def build_catalog() -> list[MethodInfo]:
         if extra:
             for key, value in extra.items():
                 setattr(info, key, value)
+
+        # Accuracy comes from what the method was fitted to, so it is looked up
+        # by method for the hand-parameterized tiers and by dataset for the
+        # neural ones, where every checkpoint trained on the same data shares a
+        # ceiling.
+        graded = _ACCURACY.get(caps.name)
+        if graded is None:
+            dataset = _MODEL_DATASET.get(caps.name)
+            graded = _DATASET_ACCURACY.get(dataset) if dataset else None
+        if graded is not None:
+            info.reference, info.error = graded
 
         spec = MODELS_BY_KEY.get(caps.name)
         if spec is not None:

@@ -184,19 +184,20 @@ class MACEBackend(_WeightsBackend):
 class MACEPolarBackend(MACEBackend):
     """MACE-POLAR, which needs a patched MACE fork rather than stock mace-torch.
 
-    The fork installs *as* mace-torch, so it replaces the stock package outright
-    — a third environment alongside the mace/fairchem split rather than
-    something that can sit beside either. Verified working here: all three sizes
-    load and evaluate once `graph_longrange` and the fork are installed.
+    This used to need a patched fork that installed *as* mace-torch, making it a
+    third environment alongside the mace/fairchem split. mace-torch 0.3.16 ships
+    `PolarMACE` upstream, so it now sits beside every other MACE model in one
+    virtualenv. Only `graph_longrange` is still missing from PyPI.
     """
 
     def install_hint(self) -> str:
         return (
-            "MACE-POLAR replaces stock mace-torch, so use a separate venv:\n"
-            "  pip install torch --index-url https://download.pytorch.org/whl/cpu\n"
-            "  pip install <mace-polar fork source> <graph_longrange source>\n"
-            "On this cluster both live under "
-            "quantum_cowboy_biochemistry/deps/{mace_polar_src,graph_longrange_src}."
+            "MACE-POLAR needs graph_longrange, which is not on PyPI:\n"
+            "  pip install --no-deps <graph_longrange source>\n"
+            "On this cluster it is at "
+            "quantum_cowboy_biochemistry/deps/graph_longrange_src.\n"
+            "--no-deps matters: its requirements are already met by [mace], and "
+            "re-resolving them can move the e3nn pin the MACE side depends on."
         )
 
     def extra_availability(self) -> Availability | None:
@@ -216,7 +217,7 @@ class MACEPolarBackend(MACEBackend):
         except Exception:
             return Availability(
                 ok=False,
-                reason="the installed mace has no PolarMACE (stock mace-torch, not the fork)",
+                reason="this mace-torch has no PolarMACE; upgrade to 0.3.16 or newer",
                 hint=self.install_hint(),
             )
         return _WeightsBackend.extra_availability(self)

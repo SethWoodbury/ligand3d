@@ -217,6 +217,33 @@ def write_sdf(
     return p
 
 
+def write_2d(molecule, path: str | Path) -> Path:
+    """Write a flat, depiction-ready structure — a sketch, not a conformer.
+
+    Deliberately 2D. This is what a fetched molecule is: a starting point to
+    edit and then embed, and writing it with fabricated 3D coordinates would
+    invite someone to mistake a layout for a geometry.
+    """
+    from rdkit.Chem import AllChem
+
+    p = Path(path)
+    if not p.suffix:
+        p = p.with_suffix(".sdf")
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    flat = Chem.Mol(molecule.mol)
+    flat.RemoveAllConformers()
+    AllChem.Compute2DCoords(flat)
+    flat.SetProp("_Name", molecule.name)
+
+    if p.suffix.lower() == ".mol":
+        p.write_text(Chem.MolToMolBlock(flat))
+    else:
+        with Chem.SDWriter(str(p)) as writer:
+            writer.write(flat)
+    return p
+
+
 def verify_pdb_roundtrip(path: str | Path, reference: Chem.Mol) -> None:
     """Confirm the file we just wrote reads back as the molecule we meant.
 

@@ -192,6 +192,17 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             )
             return
 
+        if path == "/api/templates":
+            from ..resolve import opsin_available, template_list
+
+            self._json(
+                {
+                    "templates": template_list(),
+                    "opsin": opsin_available(),
+                }
+            )
+            return
+
         if path == "/api/next-name":
             directory = (query.get("directory") or [self.defaults.get("directory", ".")])[0]
             stem = (query.get("stem") or ["sketch"])[0]
@@ -253,7 +264,38 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             self._start_build(self._read_json())
             return
 
+        if path == "/api/resolve":
+            self._resolve(self._read_json())
+            return
+
         self._send(404, b"not found", "text/plain")
+
+    def _resolve(self, data: dict) -> None:
+        """Turn a typed name, SMILES, InChI, or CID into something to edit.
+
+        A failed lookup is an ordinary outcome — a typo, a name PubChem does not
+        carry, no network — so it comes back as a message to read rather than an
+        error state.
+        """
+        from ..resolve import ResolveError, resolve, template, template_list
+
+        query = str(data.get("query") or "").strip()
+        if not query:
+            self._json({"error": "nothing to look up"}, 400)
+            return
+
+        try:
+            known = {entry["name"] for entry in template_list()}
+            found = (
+                template(query)
+                if query.lower() in known
+                else resolve(query, allow_network=not data.get("offline"))
+            )
+            self._json(found.to_json())
+        except ResolveError as exc:
+            self._json({"error": str(exc)}, 404)
+        except Exception as exc:  # a genuine bug, not a failed lookup
+            self._json({"error": f"unexpected {type(exc).__name__}: {exc}"}, 500)
 
     def _preview(self, data: dict) -> None:
         """Render how the drawing is being read, with atom indices.

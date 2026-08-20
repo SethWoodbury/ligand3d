@@ -206,6 +206,23 @@
     font-family: ui-monospace, monospace; font-size: .78rem; word-break: break-all;
   }
   .actions { display: flex; gap: .45rem; flex-wrap: wrap; align-items: center; }
+
+  .importbar {
+    display: flex; gap: .4rem; align-items: center; flex-wrap: wrap;
+    padding: .5rem .6rem .45rem; border-bottom: 1px solid var(--line);
+  }
+  .importbar input[type=text] { flex: 1 1 15rem; min-width: 10rem; }
+  .importbar select { flex: 0 0 9.5rem; }
+  #importMsg {
+    font-size: .76rem; padding: 0 .6rem; color: var(--muted);
+  }
+  #importMsg:not(:empty) { padding: .4rem .6rem; }
+  #importMsg .found { color: var(--fg); font-weight: 620; }
+  #importMsg .bad { color: var(--err); }
+  #importMsg a { color: var(--accent); }
+  #importMsg code {
+    font-family: ui-monospace, monospace; font-size: .74rem; word-break: break-all;
+  }
 </style>
 </head>
 <body>
@@ -223,6 +240,15 @@
 <main>
   <div class="col">
     <section class="card flush tall">
+      <div class="importbar">
+        <input type="text" id="importQuery" spellcheck="false"
+               placeholder="import by name, SMILES, InChI or CID — e.g. 3-Cyano-7-ethoxycoumarin">
+        <select id="importTemplate" title="start from a common scaffold">
+          <option value="">scaffold…</option>
+        </select>
+        <button class="ghost" id="importBtn">Import</button>
+      </div>
+      <div id="importMsg"></div>
       <div id="sketchHost"></div>
       <p class="tip" id="stereoTip">
         <b>Wedges and dashes:</b> pick the wedge-bond tool, then click a bond for a solid
@@ -567,6 +593,107 @@ window.jsmeOnLoad = function () {
   schedulePreview();
 };
 
+/* Import text comes from what someone typed and from PubChem, and lands in
+   innerHTML alongside markup of ours. A compound title is not trusted markup. */
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/* --------------------------------------------------------------- import */
+/* Drawing a fused polycyclic by hand is slow and easy to get wrong, and most
+   molecules worth building already have a name. This drops one onto the canvas
+   as a starting point, which is then edited like anything else you drew. */
+
+function loadIntoEditor(molblock, smiles) {
+  if (engineName === "jsme" && jsmeApplet) {
+    // readGenericMolecularInput takes a molfile or a SMILES; the molfile is
+    // preferred because RDKit has already laid it out.
+    jsmeApplet.readGenericMolecularInput(molblock || smiles);
+  } else if (engineName === "paste") {
+    const box = el("pasteBox");
+    if (box) box.value = molblock || smiles;
+  } else {
+    return false;
+  }
+  schedulePreview();
+  return true;
+}
+
+async function importQuery() {
+  const query = el("importQuery").value.trim();
+  const msg = el("importMsg");
+  if (!query) { msg.innerHTML = ""; return; }
+
+  el("importBtn").disabled = true;
+  msg.innerHTML = "looking up <code>" + esc(query) + "</code>…";
+  let payload;
+  try {
+    const response = await fetch("/api/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: query }),
+    });
+    payload = await response.json();
+  } catch (e) {
+    msg.innerHTML = '<span class="bad">could not reach the server: ' + esc(e.message) + "</span>";
+    el("importBtn").disabled = false;
+    return;
+  }
+  el("importBtn").disabled = false;
+
+  if (payload.error) {
+    msg.innerHTML = '<span class="bad">' + esc(payload.error) + "</span>";
+    return;
+  }
+  if (!loadIntoEditor(payload.molblock, payload.smiles)) {
+    msg.innerHTML = '<span class="bad">the editor is not ready yet</span>';
+    return;
+  }
+
+  /* Say where it came from. "OPSIN derived this from the name" and "PubChem
+     had a record under that name" are different claims, and the second can
+     quietly hand you the wrong compound — searching the name CO returns
+     cobalt. Showing the matched name is how you catch that. */
+  const bits = ['<span class="found">' + esc(payload.formula) + "</span>"];
+  if (payload.name && payload.name.toLowerCase() !== query.toLowerCase()) {
+    bits.push("matched <b>" + esc(payload.name) + "</b>");
+  }
+  bits.push(esc(payload.provenance));
+  let html = bits.join(" · ") + " · <code>" + esc(payload.smiles) + "</code>";
+  if (payload.url) {
+    html += ' · <a href="' + esc(payload.url) + '" target="_blank" rel="noopener">PubChem</a>';
+  }
+  (payload.notes || []).forEach((n) => { html += " · " + esc(n); });
+  msg.innerHTML = html;
+  setStatus("imported — edit it as usual");
+}
+
+function populateTemplates(data) {
+  const select = el("importTemplate");
+  const options = ['<option value="">scaffold…</option>'];
+  (data.templates || []).forEach((t) => {
+    options.push('<option value="' + t.name + '" title="' + esc(t.note) + '">' +
+      t.name + "</option>");
+  });
+  select.innerHTML = options.join("");
+  select.addEventListener("change", () => {
+    if (!select.value) return;
+    el("importQuery").value = select.value;
+    importQuery();
+    select.value = "";
+  });
+  el("importQuery").placeholder = data.opsin
+    ? "import by name, SMILES, InChI or CID — e.g. 3-Cyano-7-ethoxycoumarin"
+    : "import by name, SMILES, InChI or CID (systematic names need py2opsin + java)";
+}
+
+el("importBtn").addEventListener("click", importQuery);
+el("importQuery").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); importQuery(); }
+});
+
 /* -------------------------------------------------------------- preview */
 let previewTimer = null;
 let previewSeq = 0;
@@ -607,7 +734,7 @@ async function refreshPreview() {
       }),
     })).json();
   } catch (e) {
-    msg.innerHTML = '<span class="err">preview unavailable: ' + e.message + "</span>";
+    msg.innerHTML = '<span class="err">preview unavailable: ' + esc(e.message) + "</span>";
     return;
   }
   // A slow response for an older edit must not overwrite a newer one.
@@ -620,7 +747,7 @@ async function refreshPreview() {
     return;
   }
   if (data.error) {
-    msg.innerHTML = '<span class="err">' + data.error + "</span>";
+    msg.innerHTML = '<span class="err">' + esc(data.error) + "</span>";
     return;
   }
 
@@ -1152,6 +1279,9 @@ async function init() {
   populateBackends(cfg);
   populateSolvents(cfg);
   setupSlurm(cfg.slurm);
+  try {
+    populateTemplates(await (await fetch("/api/templates")).json());
+  } catch (e) { /* the text box still works without the scaffold menu */ }
   mountEngine(cfg);
   checkPath();
 }
