@@ -140,6 +140,14 @@
     a rough guide rather than a benchmark. Memory is peak resident during a single
     minimization.
   </p>
+  <p id="gpuNote" hidden>
+    This host can send a build to a GPU node — tick <b>run this on a GPU node (SLURM)</b>
+    on the sketcher, or pass <code>--slurm</code>. Measured speedup for a neural potential
+    on a 29-atom molecule is about <b>3&times;</b>, not more: a graph that small cannot
+    fill a GPU, and L-BFGS cannot be parallelized across its own steps. It pays off for
+    large molecules and real conformer searches, and costs more than it saves for anything
+    classical.
+  </p>
 </footer>
 
 <script>
@@ -272,6 +280,13 @@ el("onlyCharge").addEventListener("change", render);
     return;
   }
   render();
+
+  // Mentioned only where it would work, so the note never advertises a
+  // scheduler this machine does not have.
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    if (cfg.slurm && cfg.slurm.available) el("gpuNote").hidden = false;
+  } catch (e) { /* the table is the point; this is a footnote */ }
 })();
 </script>
 </body>

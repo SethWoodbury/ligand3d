@@ -408,6 +408,12 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
     if per_backend:
         breakdown = ", ".join(f"{name} {sec:.2f}s" for name, sec in per_backend.items())
         notes.append(f"minimization time: {breakdown}")
+        # Worth stating outright: a neural potential silently falling back to
+        # CPU looks exactly like one running on a GPU, only slower, and that is
+        # the difference between a queued job being worth submitting or not.
+        hardware = _mlff_device(per_backend)
+        if hardware:
+            notes.append(f"neural potential ran on {hardware}")
 
     elapsed = time.perf_counter() - started
     notes.append(f"total time {elapsed:.2f}s")
@@ -440,6 +446,31 @@ def run(
             _write_outputs(outcome, variant, settings, base)
         outcomes.append(outcome)
     return outcomes
+
+
+def _mlff_device(per_backend: dict[str, float]) -> str | None:
+    """Which processor the neural potentials used, if any ran.
+
+    Returns None when the chain was entirely classical, so nothing is claimed
+    about a run that never touched torch.
+    """
+    ran_mlff = False
+    for name in per_backend:
+        try:
+            ran_mlff = ran_mlff or get_backend(name).caps.kind == "mlff"
+        except Ligand3DError:
+            continue
+    if not ran_mlff:
+        return None
+
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return "CPU"
+        return f"GPU ({torch.cuda.get_device_name(0)})"
+    except Exception:
+        return None
 
 
 def _write_outputs(

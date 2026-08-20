@@ -15,10 +15,17 @@ htmlcov/
 *.pdb
 *.sdf
 *.xyz
+*.cif
 !examples/**/*.pdb
 !examples/**/*.sdf
+!examples/**/*.cif
 !tests/data/*.sdf
 !tests/data/*.mol
+!tests/data/*.cif
+
+# SLURM job directories: script, payload, source snapshot, logs, result
+*.slurm/
+*.slurm[0-9]*/
 
 # CREST leaves a lot behind
 crest_*.xyz

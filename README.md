@@ -381,6 +381,108 @@ quarter of a second.
 - **Long-range electrostatics matter** — `mace-polar`, and budget a minute per molecule.
 - **Inorganic or metal-containing** — `mace-mp`, which is the only one trained for it.
 
+## Running on a GPU (SLURM, at the IPD)
+
+Everything above runs on whatever machine you are sitting at. On the IPD cluster you can
+hand a build to a GPU node instead:
+
+```bash
+ligand3d build "NCC1(CC(=O)O)CCCCC1" -b mace-off -n 3 --slurm
+ligand3d slurm                      # can this host submit? what containers are there?
+ligand3d slurm --job 18977069       # what happened to that job?
+```
+
+or tick **run this on a GPU node (SLURM)** in the sketcher. The option only appears when
+the host can actually submit, so nowhere else is offered a checkbox that could only fail.
+
+This is optional in the strongest sense: `slurm.py` is imported from exactly one place in
+the CLI, nothing else in ligand3d touches it, and importing the package does not load it.
+A machine with no scheduler behaves exactly as it did before the feature existed.
+
+### Why it needs a container
+
+**Yes, apptainer is required, and not as a convention.** The `torch` in this project's
+virtualenv is the `+cpu` build. Submitting this interpreter to a GPU node would allocate
+a GPU and then quietly ignore it — the slowest possible outcome, and one that looks like
+success. The containers on `/net/software/containers` carry a CUDA torch, so the job runs
+inside one:
+
+| image | torch | potentials |
+|---|---|---|
+| `quantum_chem-20260604.sif` | 2.11.0+cu130 | MACE (all), MACE-POLAR, AIMNet2 |
+| `uma-20260527.sif` | 2.8.0+cu128 | eSEN, UMA, AllScAIP |
+
+The split is not arbitrary: it is the same e3nn incompatibility described above, which
+exists inside the containers exactly as it does in a virtualenv. ligand3d picks the image
+from the backend you asked for, and refuses a chain that mixes the two families *before*
+submitting rather than letting it fail on a node ten minutes later.
+
+Nothing is installed into the container. The package is copied into the job directory and
+put on `PYTHONPATH`, which has a second benefit: a job that sits in the queue for an hour
+runs the code that was submitted, not whatever the repo happens to contain when it
+starts. The job directory ends up holding the sbatch script, the JSON payload, the exact
+source that ran, both logs, and the result — enough to reproduce or explain the run later.
+
+### Whether it is worth it
+
+Measured with `mace-off` in the same container, one process, RTX 4000 Ada versus the four
+CPU cores the job requested:
+
+| work | CPU | GPU | speedup |
+|---|---|---|---|
+| gabapentin (29 atoms), 1 conformer | 4.94 s | 1.73 s | 2.9× |
+| gabapentin, 10-conformer search | 163 s | 48.9 s | 3.3× |
+
+**About three times faster, not thirty.** That is the number worth internalizing before
+building a workflow around this. A 29-atom graph does not come close to filling a GPU,
+and L-BFGS is inherently sequential — every step needs the forces from the one before, so
+there is nothing to overlap and the kernel launches dominate. Conformers are minimized one
+after another rather than batched, so a search scales the wall time rather than hiding it.
+
+Three minutes saved on a five-minute job is worth having when the queue is short. It is
+not worth having if the job would have finished before the scheduler found a node.
+
+So the honest guidance is narrow:
+
+- **Worth submitting** — a large or flexible molecule, a real conformer search through an
+  expensive potential (`mace-off-large`, `mace-polar`, `mace-omol`), or a batch you would
+  otherwise babysit.
+- **Not worth submitting** — anything classical or semi-empirical, and any single small
+  molecule. `mmff94` finishes in four milliseconds; you cannot beat that by waiting in a
+  queue. ligand3d says so rather than silently obliging.
+
+Every run now reports which processor the potential actually used:
+
+```
+· minimization time: mace-off 265.16s
+· neural potential ran on GPU (NVIDIA RTX 4000 Ada Generation)
+```
+
+A neural potential falling back to CPU looks identical to one on a GPU, only slower, so
+this line is worth reading before drawing conclusions about a timing.
+
+### Resources and defaults
+
+Defaults are one `gpu:small` GPU, 4 CPUs, 16 GB, one hour, on partition `gpu`, account
+`IPD`. Override any of them:
+
+```bash
+ligand3d build LIG.sdf -b mace-polar --slurm \
+  --slurm-partition gpu-bf --slurm-gpu large --slurm-time 04:00:00 \
+  --slurm-cpus 8 --slurm-mem 32G --slurm-wait
+```
+
+GPU classes are `small`, `large`, and `h200` — the old `a4000`/`b4000` GRES names no
+longer schedule, and asking for one is rejected here rather than pending forever. The
+scheduler also refuses jobs under five minutes, which is checked before submission.
+
+One trap is worth stating plainly, because it fails silently: **a compute node's `/tmp`
+is its own.** A job writing there exits 0 and leaves nothing behind. Output and job
+directories must be on `/home`, `/net`, or `/mnt`, and ligand3d refuses anything else.
+
+Point at different images with `LIGAND3D_SIF_MACE` and `LIGAND3D_SIF_FAIRCHEM`, and at a
+different account with `LIGAND3D_SLURM_ACCOUNT`.
+
 ## Protonation
 
 The default is **what you drew**. If you type a neutral carboxylic acid you get a

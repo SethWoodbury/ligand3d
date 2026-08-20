@@ -160,6 +160,16 @@ class Molecule:
         return Chem.GetFormalCharge(self.mol)
 
     @property
+    def molblock(self) -> str:
+        """A V2000 molblock, for handing this molecule to another process.
+
+        Preferred over SMILES for transport because it also carries any
+        conformer already present, and it round-trips stereochemistry for
+        conformer-less molecules just as faithfully.
+        """
+        return Chem.MolToMolBlock(self.mol)
+
+    @property
     def formula(self) -> str:
         return rdMolDescriptors.CalcMolFormula(self.mol)
 

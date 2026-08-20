@@ -289,3 +289,49 @@ class TestBondStereoNormalization:
         assert want
         assert all(label in ("E", "Z") for label in want.values())
         assert want == {key: got.get(key) for key in want}
+
+
+class TestDryRunWritesNothing:
+    """`--dry-run` was still leaving a file behind.
+
+    The default output name carries an extension, and the "an explicit
+    extension is a format request" rule then put that format straight back into
+    the list the dry run had just emptied. The web path had a test for this;
+    the CLI path did not, so only the CLI was broken.
+    """
+
+    def test_no_file_appears(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from ligand3d.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["build", "O=C1CN2CCC1CC2", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert list(tmp_path.iterdir()) == []
+
+    def test_still_reports_the_energy_it_computed(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from ligand3d.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["build", "CCO", "--dry-run", "--no-trace"])
+
+        assert "lowest strain energy" in result.stdout
+        assert list(tmp_path.iterdir()) == []
+
+    def test_an_explicit_extension_is_still_honoured_normally(self, tmp_path, monkeypatch):
+        # The rule the fix narrowed must keep working when it is not a dry run.
+        from typer.testing import CliRunner
+
+        from ligand3d.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(
+            app, ["build", "CCO", "-o", str(tmp_path / "x.pdb"), "--no-trace"]
+        )
+
+        assert result.exit_code == 0
+        assert (tmp_path / "x.pdb").exists()

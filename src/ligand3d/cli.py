@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -149,6 +151,32 @@ def build(
         "--allow-code-conflict",
         help="Generate params even if the code already exists in Rosetta.",
     ),
+    slurm: bool = typer.Option(
+        False,
+        "--slurm",
+        help="Submit to SLURM on a GPU node instead of running here (IPD). "
+        "Only worth it for the neural potentials.",
+    ),
+    slurm_wait: bool = typer.Option(
+        False, "--slurm-wait", help="With --slurm, block until the job finishes."
+    ),
+    slurm_partition: str = typer.Option(
+        "gpu", "--slurm-partition", help="SLURM partition: gpu, gpu-bf, cpu, cpu-bf."
+    ),
+    slurm_gpu: str = typer.Option(
+        "small", "--slurm-gpu", help="GPU class to request: small, large, or h200."
+    ),
+    slurm_time: str = typer.Option(
+        "01:00:00", "--slurm-time", help="Walltime. The scheduler rejects under 5 minutes."
+    ),
+    slurm_cpus: int = typer.Option(4, "--slurm-cpus", min=1, help="CPUs per task."),
+    slurm_mem: str = typer.Option("16G", "--slurm-mem", help="Memory for the job."),
+    slurm_dir: Optional[Path] = typer.Option(
+        None,
+        "--slurm-dir",
+        help="Where to keep the job script and logs. Must be on shared storage "
+        "(/home, /net, /mnt) — a compute node's /tmp is its own.",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Only print the output path."),
 ) -> None:
     """Build a minimized 3D structure. Writes mmCIF by default."""
@@ -196,10 +224,22 @@ def build(
     try:
         mol = read_input(molecule)
         target = output or Path(f"{mol.name.lower()}.{chosen[0] if chosen else 'cif'}")
-        # An explicit extension is a format request, so honour it.
+        # An explicit extension is a format request, so honour it — but not
+        # under --dry-run, where the empty format list is the whole point and
+        # the extension is only there to name a file that is never written.
         suffix = target.suffix.lower().lstrip(".")
-        if suffix in ("cif", "pdb", "sdf") and suffix not in settings.formats:
+        if not dry_run and suffix in ("cif", "pdb", "sdf") and suffix not in settings.formats:
             settings.formats = (suffix, *settings.formats)
+
+        if slurm:
+            _submit_to_slurm(
+                mol, settings, target,
+                partition=slurm_partition, gpu_class=slurm_gpu, walltime=slurm_time,
+                cpus=slurm_cpus, memory=slurm_mem, workdir=slurm_dir,
+                wait=slurm_wait, quiet=quiet,
+            )
+            return
+
         outcomes = run(mol, settings, output=target)
     except Ligand3DError as exc:
         _fail(exc)
@@ -336,6 +376,152 @@ def _print_trace(trace: list, limit: int = 12) -> None:
             console.print(f"      step {step.step:4d}  E {step.energy:14.5f}  dE {delta}")
 
 
+def _job_workdir(target: Path, requested: Optional[Path]) -> Path:
+    """Where the script and logs go. Never reuses a live directory."""
+    if requested is not None:
+        return Path(requested).expanduser()
+    base = target.expanduser().resolve().parent / f"{target.stem}.slurm"
+    if not base.exists():
+        return base
+    n = 2
+    while (candidate := base.with_name(f"{base.name}{n}")).exists():
+        n += 1
+    return candidate
+
+
+def _submit_to_slurm(
+    mol, settings, target: Path, *, partition: str, gpu_class: str, walltime: str,
+    cpus: int, memory: str, workdir: Optional[Path], wait: bool, quiet: bool,
+) -> None:
+    """Queue the build instead of running it here."""
+    from .slurm import (
+        SlurmConfig, build_payload, container_for, job_state, needs_gpu, submit, wait_for,
+    )
+
+    target = target.expanduser().resolve()
+    config = SlurmConfig(
+        partition=partition, gpu_class=gpu_class, walltime=walltime,
+        cpus=cpus, memory=memory, job_name=f"l3d-{mol.name.lower()}"[:24],
+    )
+    if not needs_gpu(settings.backend) and config.is_gpu:
+        console.print(
+            f"  [yellow]note[/yellow] {settings.backend} is not a neural potential, so a GPU "
+            "will not help. It will still run, but queueing costs more than the calculation."
+        )
+
+    payload = build_payload(mol, settings, target)
+    job = submit(payload, _job_workdir(target, workdir), config)
+
+    if quiet:
+        console.print(str(job.job_id))
+    else:
+        console.print(
+            f"  submitted job [bold]{job.job_id}[/bold] to {config.partition}"
+            + (f" on {config.gres()}" if config.is_gpu else "")
+        )
+        console.print(f"  container [dim]{Path(container_for(settings.backend)).name}[/dim]")
+        console.print("  [green]log:[/green]")
+        console.print(str(job.stdout), highlight=False, soft_wrap=True)
+        console.print("  [green]output will be:[/green]")
+        console.print(str(target), highlight=False, soft_wrap=True)
+
+    if not wait:
+        if not quiet:
+            console.print(f"\n  check on it with [bold]ligand3d slurm --job {job.job_id}[/bold]")
+        return
+
+    if not quiet:
+        console.print("\n  waiting…")
+    state = wait_for(job.job_id)
+    colour = "green" if state == "COMPLETED" else "red"
+    console.print(f"  job {job.job_id} finished: [{colour}]{state}[/{colour}]")
+    if state != "COMPLETED":
+        console.print(f"  [dim]see {job.stderr}[/dim]")
+        raise typer.Exit(1)
+    if job_state(job.job_id) == "COMPLETED" and target.exists():
+        console.print("  [green]wrote:[/green]")
+        console.print(str(target), highlight=False, soft_wrap=True)
+
+
+@app.command(hidden=True)
+def slurm_run(payload: Path = typer.Argument(..., help="A job.json written by --slurm.")) -> None:
+    """Run a submitted build. This is what executes inside the container."""
+    import json
+
+    from .sketch.session import collect_outputs, outcomes_to_result
+    from .slurm import run_payload
+
+    try:
+        molecule, outcomes = run_payload(payload)
+    except Ligand3DError as exc:
+        _fail(exc)
+        return
+
+    # The submitter reads this back, so a queued build shows the same energy
+    # plot and stereo summary as one that ran locally.
+    outputs, trace = collect_outputs(outcomes)
+    Path(payload).parent.joinpath("result.json").write_text(
+        json.dumps(outcomes_to_result(molecule, outcomes, outputs, trace), indent=1)
+    )
+
+    for outcome in outcomes:
+        for note in outcome.notes:
+            console.print(f"  · {note}")
+        if outcome.best_energy is not None:
+            record = outcome.records[0]
+            console.print(
+                f"  · lowest energy {outcome.best_energy:.4f} {record.energy_unit} "
+                f"({record.backend}), {len(outcome.records)} conformer(s)"
+            )
+        _print_written(outcome.written())
+
+
+@app.command()
+def slurm(
+    job: Optional[int] = typer.Option(None, "--job", help="Report on one job id."),
+) -> None:
+    """Check whether GPU submission will work here, or report on a job.
+
+    This is an IPD-specific convenience. Everything else in ligand3d runs
+    without SLURM.
+    """
+    import shutil as _shutil
+
+    from .slurm import (
+        QUANTUM_CHEM_SIF, UMA_SIF, apptainer_available, job_state, slurm_available,
+    )
+
+    if job is not None:
+        try:
+            console.print(f"job {job}: [bold]{job_state(job)}[/bold]")
+        except Ligand3DError as exc:
+            _fail(exc)
+        return
+
+    ok = "[green]yes[/green]"
+    no = "[red]no[/red]"
+    console.print(f"  sbatch on PATH     {ok if slurm_available() else no}")
+    console.print(f"  apptainer on PATH  {ok if apptainer_available() else no}")
+    console.print("\n  containers (these supply the CUDA torch this venv lacks):")
+    for label, sif in (("MACE, MACE-POLAR, AIMNet2", QUANTUM_CHEM_SIF),
+                       ("eSEN, UMA, AllScAIP", UMA_SIF)):
+        console.print(f"  {ok if Path(sif).exists() else no}  {label}")
+        console.print(f"     [dim]{sif}[/dim]", highlight=False, soft_wrap=True)
+
+    if not slurm_available():
+        console.print(
+            "\n  [yellow]No scheduler here.[/yellow] Submit from a login node, or drop "
+            "--slurm and run locally."
+        )
+        return
+    if _shutil.which("squeue"):
+        console.print("\n  your queue:")
+        subprocess.run(
+            ["squeue", "-u", os.environ.get("USER", ""), "-o", "%.10i %.9P %.24j %.8T %.10M %R"],
+            check=False,
+        )
+
+
 @app.command()
 def backends() -> None:
     """List minimization backends and what each one supports."""
@@ -456,6 +642,16 @@ def doctor() -> None:
         present = importlib.util.find_spec(module) is not None
         mark = "[green]✓[/green]" if present else "[yellow]✗[/yellow]"
         console.print(f"  {mark} {module} [dim]— {why}[/dim]")
+
+    # Only mentioned where it would work, so this stays quiet off the cluster.
+    from .sketch.session import slurm_status
+
+    if slurm_status()["available"]:
+        console.print(
+            "\n[bold]gpu offload[/bold]\n"
+            "  [green]✓[/green] this host can submit to SLURM "
+            "[dim]— add --slurm to a build, or run 'ligand3d slurm' for detail[/dim]"
+        )
 
 
 @app.command()

@@ -90,8 +90,11 @@
   label { display: block; font-size: .76rem; font-weight: 620; margin-bottom: .22rem; }
   .row { display: grid; gap: .5rem; margin-bottom: .55rem; }
   .row.two { grid-template-columns: 1fr 1fr; }
+  .row.three { grid-template-columns: 1fr 1fr 1fr; }
   .row.split { grid-template-columns: 1fr 11rem; }
-  @media (max-width: 520px) { .row.two, .row.split { grid-template-columns: 1fr; } }
+  @media (max-width: 520px) {
+    .row.two, .row.split, .row.three { grid-template-columns: 1fr; }
+  }
 
   input[type=text], input[type=number], select {
     width: 100%; font: inherit; font-size: .82rem; padding: .36rem .5rem;
@@ -345,6 +348,42 @@
           Tracing draws the curve below and reports the change per step. The trajectory is
           written as <code>&lt;name&gt;_traj.pdb</code>, one MODEL per step.
         </div>
+
+        <div id="slurmBox" hidden>
+          <div class="checks">
+            <label>
+              <input type="checkbox" id="slurm">
+              run this on a GPU node (SLURM)
+            </label>
+          </div>
+          <div class="row three" id="slurmOpts" hidden>
+            <div>
+              <label for="slurm_partition">Partition</label>
+              <select id="slurm_partition">
+                <option value="gpu">gpu</option>
+                <option value="gpu-bf">gpu-bf (backfill)</option>
+              </select>
+            </div>
+            <div>
+              <label for="slurm_gpu">GPU</label>
+              <select id="slurm_gpu">
+                <option value="small">small</option>
+                <option value="large">large</option>
+                <option value="h200">h200</option>
+              </select>
+            </div>
+            <div>
+              <label for="slurm_time">Walltime</label>
+              <input type="text" id="slurm_time" value="01:00:00" spellcheck="false">
+            </div>
+          </div>
+          <div class="note" id="slurmNote">
+            Only the neural potentials are slow enough on CPU to be worth queueing. The job
+            runs in an Apptainer image that has a CUDA build of torch, which this environment
+            does not; a copy of the source goes with it, so editing the repo cannot change a
+            job already in the queue. The page waits for the result.
+          </div>
+        </div>
       </div>
 
       <div class="pane" data-pane="chem">
@@ -471,6 +510,7 @@ const STAGE_COLORS = ["--c1", "--c2", "--c3", "--c4"];
 let engineName = null;
 let jsmeApplet = null;
 let polling = null;
+let CONFIG = null;
 let backends = [];
 
 /* ------------------------------------------------------------------ log */
@@ -710,6 +750,7 @@ function renderChain() {
     });
   }
   el("backendHint").textContent = describeBackend(chainValue());
+  slurmAdvice();
 }
 
 el("customChain").addEventListener("change", (e) => {
@@ -751,8 +792,45 @@ function collectSettings() {
     params_code: el("params_code").value.trim() || null,
     allow_code_conflict: el("allow_code_conflict").checked,
     threads: Number(el("threads").value) || 1,
+    slurm: el("slurm").checked,
+    slurm_options: {
+      partition: el("slurm_partition").value,
+      gpu_class: el("slurm_gpu").value,
+      walltime: el("slurm_time").value.trim() || "01:00:00",
+    },
   };
 }
+
+/* SLURM is an IPD convenience. Where there is no scheduler the whole block
+   stays hidden rather than offering a checkbox that could only fail. */
+function setupSlurm(status) {
+  if (!status || !status.available) return;
+  el("slurmBox").hidden = false;
+  el("slurm").addEventListener("change", () => {
+    el("slurmOpts").hidden = !el("slurm").checked;
+    slurmAdvice();
+  });
+  el("backend").addEventListener("change", slurmAdvice);
+}
+
+/* Queueing a force field costs far more in wait than it saves in compute. */
+function slurmAdvice() {
+  if (!CONFIG || !CONFIG.slurm || !CONFIG.slurm.available) return;
+  const chain = chainValue().split(",").map((s) => s.trim());
+  const kinds = new Map((CONFIG.backends || []).map((b) => [b.id, b.kind]));
+  const anyMlff = chain.some((name) => kinds.get(name) === "mlff");
+  const note = el("slurmNote");
+  if (el("slurm").checked && !anyMlff) {
+    note.innerHTML = "<b>Nothing here needs a GPU.</b> " +
+      chainValue() + " runs in well under a second on this machine, so waiting " +
+      "in the queue is slower than just building it. Uncheck this.";
+    note.style.color = "var(--warn)";
+  } else {
+    note.innerHTML = SLURM_NOTE;
+    note.style.color = "";
+  }
+}
+const SLURM_NOTE = document.getElementById("slurmNote").innerHTML;
 
 /* ---------------------------------------------------------------- build */
 async function build(overwrite) {
@@ -1067,11 +1145,13 @@ async function init() {
   let cfg;
   try { cfg = await (await fetch("/api/config")).json(); }
   catch (e) { el("engineTag").textContent = "server unreachable"; return; }
+  CONFIG = cfg;
   el("directory").value = cfg.defaults.directory || ".";
   el("filename").value = cfg.defaults.filename || "sketch0";
   if (cfg.defaults.threads) el("threads").value = cfg.defaults.threads;
   populateBackends(cfg);
   populateSolvents(cfg);
+  setupSlurm(cfg.slurm);
   mountEngine(cfg);
   checkPath();
 }

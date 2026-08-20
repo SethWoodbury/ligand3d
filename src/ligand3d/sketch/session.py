@@ -10,6 +10,7 @@ the page can warn before it overwrites anything.
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import re
 import threading
@@ -172,6 +173,9 @@ class Job:
     log: list[dict[str, str]] = field(default_factory=list)
     result: dict[str, Any] | None = None
     error: str | None = None
+    slurm_options: dict[str, Any] | None = None
+    """Set when the page asked for the build to run on a compute node."""
+    slurm_job_id: int | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def say(self, text: str, level: str = "info") -> None:
@@ -186,6 +190,7 @@ class Job:
                 "log": list(self.log),
                 "result": self.result,
                 "error": self.error,
+                "slurm_job_id": self.slurm_job_id,
             }
 
 
@@ -335,6 +340,11 @@ def run_job(
         else:
             job.say("dry run: building and checking, writing no files", "warn")
             base = Path(target.directory) / target.stem
+
+        if job.slurm_options:
+            _run_on_slurm(job, molecule, settings, base)
+            return
+
         outcomes = run(molecule, settings, output=base)
 
         outputs: list[str] = []
@@ -363,26 +373,7 @@ def run_job(
             else:
                 job.say("no files written (dry run)", "warn")
 
-        from .. import molecule as mol_mod
-
-        job.result = {
-            "smiles": molecule.smiles,
-            "formula": molecule.formula,
-            "outputs": outputs,
-            "n_conformers": sum(len(o.records) for o in outcomes),
-            "seconds": round(sum(o.wall_seconds for o in outcomes), 3),
-            "stereocenters": [
-                {"atom": i, "code": code} for i, code in molecule.stereo.assigned_centers
-            ],
-            "double_bonds": [
-                {
-                    "begin": r.begin, "end": r.end, "cip": r.cip,
-                    "cis_trans": r.cis_trans,
-                }
-                for r in mol_mod.describe_double_bonds(molecule)
-            ],
-            "trace": trace,
-        }
+        job.result = outcomes_to_result(molecule, outcomes, outputs, trace)
         job.state = "done"
 
     except Ligand3DError as exc:
@@ -396,6 +387,132 @@ def run_job(
         job.say(traceback.format_exc().strip().splitlines()[-1], "error")
         job.error = f"{type(exc).__name__}: {exc}"
         job.state = "error"
+
+
+def outcomes_to_result(
+    molecule, outcomes, outputs: list[str], trace: list[dict]
+) -> dict[str, Any]:
+    """What the page needs to draw a finished build.
+
+    Shared with the SLURM path, which runs on a compute node and writes this
+    same structure to disk. Keeping one serializer means a queued build gets
+    the energy plot and the stereo summary, not a lesser view.
+    """
+    from .. import molecule as mol_mod
+
+    return {
+        "smiles": molecule.smiles,
+        "formula": molecule.formula,
+        "outputs": outputs,
+        "n_conformers": sum(len(o.records) for o in outcomes),
+        "seconds": round(sum(o.wall_seconds for o in outcomes), 3),
+        "stereocenters": [
+            {"atom": i, "code": code} for i, code in molecule.stereo.assigned_centers
+        ],
+        "double_bonds": [
+            {"begin": r.begin, "end": r.end, "cip": r.cip, "cis_trans": r.cis_trans}
+            for r in mol_mod.describe_double_bonds(molecule)
+        ],
+        "trace": trace,
+    }
+
+
+def collect_outputs(outcomes) -> tuple[list[str], list[dict]]:
+    """The written paths and the flattened energy trace across all outcomes."""
+    outputs: list[str] = []
+    trace: list[dict] = []
+    for outcome in outcomes:
+        outputs.extend(str(p) for p in outcome.written())
+        if outcome.trace:
+            trace.extend(step.to_json() for step in outcome.trace)
+    return outputs, trace
+
+
+def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
+    """Queue the build on a GPU node and follow it, instead of running here.
+
+    The page stays responsive because this is already on a background thread;
+    all that changes is what the thread is waiting on.
+    """
+    import time
+
+    from ..slurm import (
+        SlurmConfig, build_payload, container_for, job_state, needs_gpu, submit,
+    )
+
+    options = job.slurm_options or {}
+    config = SlurmConfig(
+        partition=str(options.get("partition") or "gpu"),
+        gpu_class=str(options.get("gpu_class") or "small"),
+        walltime=str(options.get("walltime") or "01:00:00"),
+        cpus=int(options.get("cpus") or 4),
+        memory=str(options.get("memory") or "16G"),
+        job_name=f"l3d-{molecule.name.lower()}"[:24],
+    )
+    if not needs_gpu(settings.backend):
+        job.say(
+            f"{settings.backend} is not a neural potential, so a GPU will not help — "
+            "queueing costs more than the calculation does",
+            "warn",
+        )
+
+    workdir = base.parent / f"{base.stem}.slurm"
+    n = 2
+    while workdir.exists():
+        workdir = base.parent / f"{base.stem}.slurm{n}"
+        n += 1
+
+    submitted = submit(build_payload(molecule, settings, base), workdir, config)
+    job.slurm_job_id = submitted.job_id
+    job.say(
+        f"submitted SLURM job {submitted.job_id} to {config.partition}"
+        + (f" on {config.gres()}" if config.is_gpu else ""),
+        "ok",
+    )
+    job.say(f"container {Path(container_for(settings.backend)).name}")
+    job.say(f"log {submitted.stdout}")
+
+    last = ""
+    while True:
+        state = job_state(submitted.job_id)
+        if state != last:
+            job.say(f"job {submitted.job_id} is {state}")
+            last = state
+        if state in TERMINAL_SLURM_STATES:
+            break
+        time.sleep(5)
+
+    if last != "COMPLETED":
+        tail = _tail(submitted.stderr, 12)
+        for line in tail:
+            job.say(line, "error")
+        raise Ligand3DError(
+            f"SLURM job {submitted.job_id} ended as {last}. Full log: {submitted.stderr}"
+        )
+
+    result_path = workdir / "result.json"
+    if not result_path.exists():
+        raise Ligand3DError(
+            f"job {submitted.job_id} completed but wrote no result. See {submitted.stderr}"
+        )
+    job.result = json.loads(result_path.read_text())
+    job.result["slurm_job_id"] = submitted.job_id
+    for path in job.result.get("outputs", []):
+        job.say(str(path), "ok")
+    job.state = "done"
+
+
+TERMINAL_SLURM_STATES = {
+    "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL",
+    "PREEMPTED", "BOOT_FAIL", "DEADLINE", "OUT_OF_MEMORY",
+}
+
+
+def _tail(path: Path, lines: int) -> list[str]:
+    try:
+        return path.read_text(errors="replace").strip().splitlines()[-lines:]
+    except OSError:
+        return []
 
 
 def _read_structure(text: str, job: Job):
@@ -465,6 +582,30 @@ def _settings_from_json(data: dict[str, Any]):
         params_code=(data.get("params_code") or None),
         allow_code_conflict=bool(data.get("allow_code_conflict")),
     )
+
+
+def slurm_status() -> dict[str, Any]:
+    """Whether this host can hand a build to a GPU node.
+
+    The page hides the option entirely when it cannot, so nobody outside the
+    IPD cluster is offered a checkbox that could only fail.
+    """
+    from ..slurm import (
+        QUANTUM_CHEM_SIF, UMA_SIF, apptainer_available, slurm_available,
+    )
+
+    has_sbatch = slurm_available()
+    has_apptainer = apptainer_available()
+    containers = {
+        "mace": Path(QUANTUM_CHEM_SIF).exists(),
+        "fairchem": Path(UMA_SIF).exists(),
+    }
+    return {
+        "available": has_sbatch and has_apptainer and any(containers.values()),
+        "sbatch": has_sbatch,
+        "apptainer": has_apptainer,
+        "containers": containers,
+    }
 
 
 def solvent_catalog() -> list[dict[str, Any]]:

@@ -37,6 +37,7 @@ from .session import (
     inspect_target,
     next_filename,
     run_job,
+    slurm_status,
     solvent_catalog,
 )
 
@@ -186,6 +187,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                     "backends": backend_catalog(),
                     "solvents": solvent_catalog(),
                     "defaults": self.defaults,
+                    "slurm": slurm_status(),
                 }
             )
             return
@@ -329,6 +331,8 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         job = self.jobs.create()
+        if settings.get("slurm"):
+            job.slurm_options = settings.get("slurm_options") or {}
         thread = threading.Thread(
             target=run_job, args=(job, molblock, settings, info), daemon=True
         )
