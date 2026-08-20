@@ -68,11 +68,13 @@ class TestCatalog:
 
 
 class TestMacePolar:
-    """MACE-POLAR is real: it loads and evaluates once its fork is installed.
+    """MACE-POLAR is real: it loads and evaluates, and needs one extra package.
 
-    It was previously listed as unloadable. What it actually needs is a patched
-    MACE fork that installs *as* mace-torch, so it is a third mutually exclusive
-    environment rather than something that sits beside stock mace.
+    It was once listed as unloadable, then as needing a patched MACE fork that
+    installed *as* mace-torch — a third mutually exclusive environment. Neither
+    is true any more: mace-torch 0.3.16 ships PolarMACE upstream, so POLAR sits
+    beside every other MACE model and only `graph_longrange`, which is not on
+    PyPI, is still separate.
     """
 
     @pytest.mark.parametrize("key", ["mace-polar-s", "mace-polar", "mace-polar-l"])
@@ -86,8 +88,8 @@ class TestMacePolar:
 
         assert "mace-polar" not in UNSUPPORTED_MODELS
 
-    def test_availability_explains_the_fork_requirement(self):
-        """However it is unavailable, the hint must name the fork.
+    def test_availability_names_the_package_that_is_missing(self):
+        """However it is unavailable, the hint must say what to install.
 
         The reason varies with what is missing: with no torch at all the module
         check fires first and says so, and only once mace is present does the
@@ -99,11 +101,22 @@ class TestMacePolar:
         backend = get_backend("mace-polar")
         availability = backend.available()
         if importlib.util.find_spec("graph_longrange") is not None:
-            return  # the fork is installed here; nothing to explain
+            return  # installed here; nothing to explain
         assert not availability
         assert availability.reason
-        assert "separate venv" in availability.hint
         assert "graph_longrange" in availability.hint
+
+    def test_the_hint_does_not_still_demand_a_separate_environment(self):
+        """The fork was merged upstream, so that advice is now wrong.
+
+        Worth pinning: this text told people to build a third virtualenv, which
+        is a real afternoon of work to follow for no reason.
+        """
+        hint = get_backend("mace-polar").install_hint()
+        assert "separate venv" not in hint
+        assert "fork" not in hint
+        assert "--no-deps" in hint
+        assert "graph_longrange" in hint
 
     def test_graph_longrange_is_the_reason_once_mace_is_present(self):
         """With stock mace installed, the specific missing piece is named."""
