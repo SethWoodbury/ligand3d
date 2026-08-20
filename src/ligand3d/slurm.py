@@ -12,9 +12,11 @@ Two details make this more than "shell out to sbatch":
 
 **The local environment is CPU-only.** `torch` here is the `+cpu` build, so
 submitting the current interpreter to a GPU node would allocate a GPU and ignore
-it. The job therefore runs inside an Apptainer image that has a CUDA torch, with
-this source tree bind-mounted and put on PYTHONPATH — no install step, and the
-code that runs is the code you have checked out.
+it — the slowest possible outcome, and one that looks like success. The job
+therefore runs inside an Apptainer image that has a CUDA torch, importing a copy
+of this package taken at submission time. No install step, and a job that waits
+an hour in the queue still runs the code that was submitted rather than whatever
+the working tree holds when it finally starts.
 
 **The right image depends on the backend.** The mace/fairchem e3nn split exists
 inside the containers too: the quantum_chem image carries e3nn 0.4.4 for MACE and
