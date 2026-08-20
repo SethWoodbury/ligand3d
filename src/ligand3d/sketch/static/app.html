@@ -67,7 +67,15 @@
     main > .col { padding: 0; }
     #splitter { display: none; }
   }
-  .col { display: flex; flex-direction: column; gap: .75rem; min-width: 0; min-height: 0; }
+  /* Each column scrolls on its own. When the energy plot appears the right
+     column can genuinely need more room than the viewport has, and scrolling
+     the column rather than the page keeps the editor in place while you read
+     the log. */
+  .col {
+    display: flex; flex-direction: column; gap: .75rem;
+    min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    scrollbar-gutter: stable;
+  }
 
   /* Drag to give either side more width. */
   #splitter {
@@ -228,7 +236,13 @@
   footer a:hover { text-decoration: underline; }
 
   #plotCard { display: none; }
-  #plot { width: 100%; height: 230px; display: block; }
+  /* Drag the plot's bottom edge. It is the panel that appears out of nowhere
+     after a build and takes space from the run log, so it is the one that
+     needs to give it back. */
+  #plotWrap {
+    resize: vertical; overflow: hidden; height: 230px; min-height: 110px;
+  }
+  #plot { width: 100%; height: 100%; display: block; }
   #plot text { font: 10px ui-monospace, monospace; fill: var(--muted); }
   #plot .grid { stroke: var(--line); stroke-width: 1; }
   #plot .axis { stroke: var(--border); stroke-width: 1; }
@@ -240,6 +254,10 @@
   .swatch { width: .7rem; height: .18rem; border-radius: 2px; display: inline-block; }
   #plotHint { font-size: .72rem; color: var(--muted); margin-top: .35rem; }
 
+  /* `.card.tall` sets min-height: 0, which let the log be squeezed to nothing
+     once the plot appeared. A firm floor instead: the column scrolls rather
+     than crushing the thing you are trying to read. */
+  #logCard { min-height: 15rem; }
   #log {
     background: var(--soft); border-top: 1px solid var(--line);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .755rem;
@@ -581,12 +599,15 @@
 
     <section class="card" id="plotCard">
       <h2>Energy per step</h2>
-      <svg id="plot" preserveAspectRatio="none" role="img" aria-label="energy versus optimizer step"></svg>
+      <div id="plotWrap">
+        <svg id="plot" preserveAspectRatio="none" role="img" aria-label="energy versus optimizer step"></svg>
+      </div>
+      <div class="grip">drag the corner to resize &#8600;</div>
       <div class="legend" id="plotLegend"></div>
       <div id="plotHint"></div>
     </section>
 
-    <section class="card flush tall">
+    <section class="card flush tall" id="logCard">
       <div class="loghead">
         <h2>Run log</h2>
         <span class="grow"></span>
@@ -699,6 +720,7 @@ function loadLayout() {
   try { saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"); } catch (e) { saved = {}; }
   if (saved.split) document.documentElement.style.setProperty("--split", saved.split + "%");
   if (saved.sketch) el("sketchWrap").style.height = saved.sketch + "px";
+  if (saved.plot) el("plotWrap").style.height = saved.plot + "px";
 }
 
 let saveTimer = null;
@@ -706,10 +728,15 @@ function saveLayout() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const split = document.documentElement.style.getPropertyValue("--split");
+    // The plot card is hidden until there is a trace, and a hidden element
+    // measures zero — saving that would restore a collapsed plot next time.
+    const plot = Math.round(el("plotWrap").getBoundingClientRect().height);
     try {
+      const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}");
       localStorage.setItem(LAYOUT_KEY, JSON.stringify({
         split: split ? parseFloat(split) : undefined,
         sketch: Math.round(el("sketchWrap").getBoundingClientRect().height),
+        plot: plot > 0 ? plot : saved.plot,
       }));
     } catch (e) { /* private browsing, quota — the layout just will not persist */ }
   }, 300);
@@ -770,6 +797,12 @@ function watchResizes() {
   // Redrawing on that change matters because the layout is computed server-side
   // for a given box shape, so a stale drawing is laid out for the old one.
   new ResizeObserver(() => schedulePreview()).observe(el("previewBox"));
+  // Same reasoning for the plot: it is re-laid out at the new height rather
+  // than stretched, so the axis labels stay the size they were drawn at.
+  new ResizeObserver(() => {
+    if (lastTrace) drawPlot(lastTrace);
+    saveLayout();
+  }).observe(el("plotWrap"));
 }
 
 /* Import text comes from what someone typed and from PubChem, and lands in
@@ -1350,10 +1383,13 @@ function pollJob(jobId) {
 }
 
 /* ----------------------------------------------------------- the graph */
+let lastTrace = null;
+
 function drawPlot(trace) {
   const card = el("plotCard");
   const svg = el("plot");
-  if (!trace || !trace.length) { card.style.display = "none"; return; }
+  lastTrace = trace && trace.length ? trace : null;
+  if (!lastTrace) { card.style.display = "none"; return; }
 
   // The stages run one after another, so the x axis is the cumulative step
   // count: a second method that took 20 steps after 502 of the first is drawn
@@ -1387,7 +1423,12 @@ function drawPlot(trace) {
     return entry;
   });
 
-  const W = 580, H = 230, PAD_L = 64, PAD_R = 12, PAD_T = 14, PAD_B = 40;
+  // The viewBox height tracks the box, so resizing re-lays the plot out rather
+  // than stretching it — preserveAspectRatio="none" would squash the tick
+  // labels along with everything else.
+  const W = 580;
+  const H = Math.max(110, Math.round(el("plotWrap").clientHeight) || 230);
+  const PAD_L = 64, PAD_R = 12, PAD_T = 14, PAD_B = 40;
   const maxX = Math.max(1, offset - 1);
   const allY = series.reduce((acc, s) => acc.concat(s.points.map((p) => p.y)), []);
   let minY = Math.min(0, ...allY), maxY = Math.max(0, ...allY);
