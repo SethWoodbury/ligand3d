@@ -467,9 +467,97 @@ def count_embeddable_isomers(mol: Chem.Mol, limit: int = 2) -> int:
     return len(seen)
 
 
+def is_resonance_averaged_center(mol: Chem.Mol, idx: int) -> bool:
+    """True if this atom only looks stereogenic because of oxo resonance.
+
+    A phosphate diester phosphorus has four different neighbours on paper — two
+    bridging oxygens, a double-bonded oxygen and a charged or protonated one —
+    so graph analysis calls it a stereocenter. It is not. The two terminal
+    oxygens are one delocalized system: the negative charge and the double bond
+    are a drawing convention for a P-O bond order of 1.5 on both, and where the
+    proton sits is a matter of pH, not configuration. Swapping them is the same
+    molecule, so there is nothing to draw a wedge on.
+
+    This is why NAD+, ATP, and every nucleotide read as having undefined
+    stereocenters at their phosphorus atoms.
+
+    The test is two or more terminal chalcogens *of the same element*, which is
+    what makes the pair interchangeable. A phosphorothioate with one =O and one
+    S- is genuinely chiral — Rp and Sp are different compounds that behave
+    differently — so it must keep being treated as a stereocenter. Suppressing
+    that would be a worse error than the one being fixed here. A dithioate with
+    =S and S-, on the other hand, is averaged in exactly the way a phosphate is.
+    """
+    atom = mol.GetAtomWithIdx(idx)
+    if atom.GetSymbol() not in ("P", "S"):
+        return False
+
+    terminal: dict[int, int] = {}
+    for nbr in atom.GetNeighbors():
+        # O, S, Se: the chalcogens that carry the delocalized bond order.
+        if nbr.GetDegree() == 1 and nbr.GetAtomicNum() in (8, 16, 34):
+            terminal[nbr.GetAtomicNum()] = terminal.get(nbr.GetAtomicNum(), 0) + 1
+    return any(count >= 2 for count in terminal.values())
+
+
+def resonance_averaged_centers(molecule: Molecule) -> list[int]:
+    """Undefined centers that are artifacts of oxo resonance, in atom order."""
+    return [
+        idx
+        for idx in molecule.stereo.unassigned_centers
+        if is_resonance_averaged_center(molecule.mol, idx)
+    ]
+
+
+def describe_resonance_centers(molecule: Molecule) -> str:
+    """One sentence explaining why these atoms are not stereocenters.
+
+    Worth spelling out rather than staying silent: the atoms *are* flagged by
+    the audit, and someone comparing that list against this explanation should
+    be able to see why the two disagree.
+    """
+    indices = resonance_averaged_centers(molecule)
+    if not indices:
+        return ""
+
+    mol = molecule.mol
+    table = Chem.GetPeriodicTable()
+    elements = set()
+    for idx in indices:
+        atom = mol.GetAtomWithIdx(idx)
+        counts: dict[int, int] = {}
+        for nbr in atom.GetNeighbors():
+            if nbr.GetDegree() == 1 and nbr.GetAtomicNum() in (8, 16, 34):
+                counts[nbr.GetAtomicNum()] = counts.get(nbr.GetAtomicNum(), 0) + 1
+        elements.update(
+            table.GetElementSymbol(z) for z, n in counts.items() if n >= 2
+        )
+
+    centers = ", ".join(f"atom {i}" for i in indices)
+    kinds = " and ".join(sorted(elements)) or "chalcogen"
+    many = len(indices) > 1
+    return (
+        f"{centers}: {mol.GetAtomWithIdx(indices[0]).GetSymbol()} with two equivalent "
+        f"terminal {kinds}. The double bond and the negative charge are one "
+        f"delocalized system and the proton position is a matter of pH, so swapping "
+        f"them gives the same molecule — "
+        f"{'these are not real stereocenters' if many else 'this is not a real stereocenter'}, "
+        f"and there is nothing to draw."
+    )
+
+
 def has_real_stereo_ambiguity(molecule: Molecule) -> bool:
     """True if the undefined stereo elements genuinely give different molecules."""
     if not molecule.stereo.has_undefined:
+        return False
+    # Phosphate-like centers are not a choice anyone can make, so a molecule
+    # whose only undefined centers are those is not ambiguous.
+    real = [
+        idx
+        for idx in molecule.stereo.unassigned_centers
+        if not is_resonance_averaged_center(molecule.mol, idx)
+    ]
+    if not real and not molecule.stereo.unassigned_bonds:
         return False
     return count_embeddable_isomers(molecule.mol, limit=2) > 1
 
@@ -485,7 +573,14 @@ def classify_undefined_stereo(molecule: Molecule) -> list[str]:
     1,3-disubstituted cyclobutane is the classic case, and nothing about it
     looks like a stereocenter until someone says the word "cis".
     """
-    undefined = list(molecule.stereo.unassigned_centers)
+    mol = molecule.mol
+    # Phosphate-like phosphorus is not something anyone can assign, so it never
+    # appears as work to do. It is reported separately, as an explanation.
+    undefined = [
+        idx
+        for idx in molecule.stereo.unassigned_centers
+        if not is_resonance_averaged_center(mol, idx)
+    ]
     if not undefined:
         return []
     if not has_real_stereo_ambiguity(molecule):
@@ -493,7 +588,6 @@ def classify_undefined_stereo(molecule: Molecule) -> list[str]:
         # is nothing for the user to decide and no advice to give.
         return []
 
-    mol = molecule.mol
     ring_info = mol.GetRingInfo()
     descriptions: list[str] = []
     handled: set[int] = set()

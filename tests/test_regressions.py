@@ -335,3 +335,176 @@ class TestDryRunWritesNothing:
 
         assert result.exit_code == 0
         assert (tmp_path / "x.pdb").exists()
+
+
+class TestPhosphateIsNotAStereocenter:
+    """NAD+ was refused for undefined stereochemistry at its two phosphorus atoms.
+
+    A phosphate diester P has four different neighbours on paper — two bridging
+    oxygens, a double-bonded one and a charged one — so graph analysis calls it
+    a stereocenter. It is not: the terminal oxygens are one delocalized system,
+    and where the proton sits is a matter of pH. Nothing can be drawn to resolve
+    it, so demanding that someone resolve it made the molecule unbuildable.
+    """
+
+    NAD = (
+        "NC(=O)c1ccc[n+]([C@@H]2O[C@H](COP(=O)([O-])OP(=O)(O)OC[C@H]3O"
+        "[C@@H](n4cnc5c(N)ncnc54)[C@H](O)[C@@H]3O)[C@@H](O)[C@H]2O)c1"
+    )
+    ATP = (
+        "Nc1ncnc2c1ncn2[C@@H]1O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)"
+        "[C@@H](O)[C@H]1O"
+    )
+
+    def test_nad_is_accepted(self):
+        from ligand3d.molecule import require_defined_stereo
+
+        molecule = from_smiles(self.NAD)
+        assert molecule.stereo.unassigned_centers  # RDKit still flags them
+        require_defined_stereo(molecule)  # but they are not a real ambiguity
+
+    def test_atp_is_accepted(self):
+        from ligand3d.molecule import require_defined_stereo
+
+        require_defined_stereo(from_smiles(self.ATP))
+
+    def test_nad_builds(self):
+        outcome = build(from_smiles(self.NAD), Settings(backend="mmff94", sample=1))
+        assert outcome.mol_3d.GetNumConformers() == 1
+
+    def test_the_phosphorus_atoms_are_named_as_the_reason(self):
+        from ligand3d.molecule import resonance_averaged_centers
+
+        molecule = from_smiles(self.NAD)
+        assert resonance_averaged_centers(molecule) == list(
+            molecule.stereo.unassigned_centers
+        )
+
+    def test_the_explanation_says_why_rather_than_going_silent(self):
+        from ligand3d.molecule import describe_resonance_centers
+
+        text = describe_resonance_centers(from_smiles(self.NAD))
+        assert "atom 13" in text and "atom 17" in text
+        assert "delocalized" in text
+        assert "not real stereocenters" in text
+
+    def test_nothing_is_left_for_the_user_to_fix(self):
+        from ligand3d.molecule import classify_undefined_stereo
+
+        assert classify_undefined_stereo(from_smiles(self.NAD)) == []
+
+
+class TestRealPhosphorusChiralitySurvives:
+    """The fix must not erase stereochemistry that genuinely exists.
+
+    Rp and Sp phosphorothioates are different compounds with different
+    biochemistry, and a chiral phosphotriester is a textbook P stereocenter.
+    Suppressing those would be a worse bug than the one being fixed.
+    """
+
+    @pytest.mark.parametrize(
+        "name, smiles",
+        [
+            ("phosphorothioate diester, =O and S-", "CO[P](=O)([S-])OCC"),
+            ("chiral phosphotriester", "CO[P](=O)(OCC)OC(C)C"),
+            ("methylphosphonate, one terminal O", "C[P](=O)(OC)OCC"),
+            ("sulfoxide", "C[S](=O)CC"),
+        ],
+    )
+    def test_still_refused_as_ambiguous(self, name, smiles):
+        from ligand3d.molecule import has_real_stereo_ambiguity, require_defined_stereo
+
+        molecule = from_smiles(smiles)
+        assert has_real_stereo_ambiguity(molecule), name
+        with pytest.raises(StereoError):
+            require_defined_stereo(molecule)
+
+    @pytest.mark.parametrize(
+        "smiles", ["CO[P](=O)([O-])OCC", "CO[P](=S)([S-])OCC", "CO[S](=O)[O-]"]
+    )
+    def test_matched_terminal_pairs_are_averaged(self, smiles):
+        """Two of the same element are interchangeable; =O with S- is not."""
+        from ligand3d.molecule import is_resonance_averaged_center
+
+        molecule = from_smiles(smiles)
+        centre = next(
+            a.GetIdx() for a in molecule.mol.GetAtoms() if a.GetSymbol() in ("P", "S")
+            and a.GetDegree() > 2
+        )
+        assert is_resonance_averaged_center(molecule.mol, centre)
+
+    def test_a_defined_phosphorothioate_keeps_its_configuration(self):
+        molecule = from_smiles("CO[P@](=O)([S-])OCC")
+        assert molecule.stereo.assigned_centers
+
+
+class TestAvailabilityChecksStayCheap:
+    """Asking what a backend can do must not load what it would need to run.
+
+    The MACE-POLAR check did `from mace.modules import extensions`, which pulls
+    in torch and the whole MACE stack — 5.7 seconds. It was invisible while
+    graph_longrange was missing, because the check above it short-circuited
+    first; installing that package put a six-second stall in front of every
+    sketcher page load, since the page asks for the backend list before it can
+    render.
+    """
+
+    def test_no_backend_imports_torch_to_answer(self):
+        import subprocess
+        import sys
+
+        # A subprocess, because torch is already imported in this one.
+        probe = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import sys\n"
+                "from ligand3d.minimize import all_backends\n"
+                "for b in all_backends():\n"
+                "    try: b.available()\n"
+                "    except Exception: pass\n"
+                "heavy = [m for m in ('torch', 'mace', 'ase') if m in sys.modules]\n"
+                "print(','.join(heavy))\n",
+            ],
+            capture_output=True, text=True, timeout=180,
+        )
+        assert probe.returncode == 0, probe.stderr[-2000:]
+        loaded = probe.stdout.strip()
+        assert not loaded, f"availability probing imported {loaded}"
+
+    def test_building_the_catalog_is_fast(self):
+        """A wall-clock bound, because that is what the user actually felt."""
+        import subprocess
+        import sys
+        import time
+
+        started = time.perf_counter()
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "from ligand3d.catalog import build_catalog; build_catalog()"],
+            capture_output=True, text=True, timeout=120,
+        )
+        elapsed = time.perf_counter() - started
+        assert probe.returncode == 0, probe.stderr[-2000:]
+        # Interpreter start plus RDKit is most of this; the regression was 7s of
+        # catalog on top. Generous so a slow shared filesystem cannot flake it.
+        assert elapsed < 15, f"catalog took {elapsed:.1f}s"
+
+    def test_polar_is_detected_without_importing_mace(self):
+        import importlib.util
+
+        if importlib.util.find_spec("mace") is None:
+            pytest.skip("mace not installed")
+        import subprocess
+        import sys
+
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "import sys\n"
+             "from ligand3d.minimize.mlff import _mace_has_polar\n"
+             "found = _mace_has_polar()\n"
+             "print(found, 'torch' in sys.modules, 'mace' in sys.modules)\n"],
+            capture_output=True, text=True, timeout=120,
+        )
+        found, torch_loaded, mace_loaded = probe.stdout.split()
+        assert found == "True"
+        assert torch_loaded == "False" and mace_loaded == "False"

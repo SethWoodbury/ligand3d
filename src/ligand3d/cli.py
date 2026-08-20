@@ -307,14 +307,23 @@ def _print_stereo(mol) -> None:
         console.print(f"  double bond {report.begin}-{report.end}: {gloss}")
 
     if audit.unassigned_centers:
-        from .molecule import has_real_stereo_ambiguity
+        from .molecule import (
+            describe_resonance_centers,
+            has_real_stereo_ambiguity,
+            resonance_averaged_centers,
+        )
 
-        if has_real_stereo_ambiguity(mol):
-            atoms = ", ".join(str(i) for i in audit.unassigned_centers)
+        averaged = set(resonance_averaged_centers(mol))
+        if averaged:
+            console.print(f"  [dim]{escape(describe_resonance_centers(mol))}[/dim]")
+
+        remaining = [i for i in audit.unassigned_centers if i not in averaged]
+        if remaining and has_real_stereo_ambiguity(mol):
+            atoms = ", ".join(str(i) for i in remaining)
             console.print(f"  [yellow]undefined stereocenter(s): atom {atoms}[/yellow]")
-        else:
+        elif remaining:
             console.print(
-                f"  [dim]{len(audit.unassigned_centers)} atom(s) look stereogenic but "
+                f"  [dim]{len(remaining)} atom(s) look stereogenic but "
                 f"are fixed by the ring system[/dim]"
             )
 

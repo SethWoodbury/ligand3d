@@ -17,6 +17,8 @@ wrong tool for zwitterions no matter how they handle charge.
 from __future__ import annotations
 
 import os
+from functools import lru_cache
+from pathlib import Path
 
 from .ase_bridge import ASEBackend
 from .base import (
@@ -46,6 +48,31 @@ def _disable_torch_compile() -> None:
         torch._dynamo.config.suppress_errors = True
     except Exception:  # torch not installed, or an API that moved
         pass
+
+
+@lru_cache(maxsize=1)
+def _mace_has_polar() -> bool:
+    """Whether the installed mace defines PolarMACE, without importing it.
+
+    Reading the source file rather than importing matters more than it looks.
+    `from mace.modules import extensions` pulls in torch and the whole MACE
+    stack — 5.7 seconds — and availability checks run for every backend when
+    the sketcher asks what it can offer. That cost was invisible while
+    graph_longrange was missing, because the check above short-circuited first;
+    installing it put a six-second stall in front of every page load.
+
+    An availability check must never import the thing it is checking for.
+    """
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec("mace")
+        if spec is None or not spec.submodule_search_locations:
+            return False
+        source = Path(list(spec.submodule_search_locations)[0]) / "modules" / "extensions.py"
+        return source.exists() and "class PolarMACE" in source.read_text(errors="replace")
+    except Exception:
+        return False
 
 
 def _device() -> str:
@@ -209,12 +236,7 @@ class MACEPolarBackend(MACEBackend):
                 reason="graph_longrange is not installed",
                 hint=self.install_hint(),
             )
-        try:
-            from mace.modules import extensions  # noqa: F401
-
-            if not hasattr(extensions, "PolarMACE"):
-                raise ImportError("PolarMACE missing")
-        except Exception:
+        if not _mace_has_polar():
             return Availability(
                 ok=False,
                 reason="this mace-torch has no PolarMACE; upgrade to 0.3.16 or newer",

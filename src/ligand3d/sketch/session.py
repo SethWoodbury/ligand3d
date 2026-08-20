@@ -248,18 +248,27 @@ def describe_stereo(molecule) -> list[str]:
                 )
 
     if audit.unassigned_centers:
-        from ..molecule import has_real_stereo_ambiguity
+        from ..molecule import (
+            describe_resonance_centers,
+            has_real_stereo_ambiguity,
+            resonance_averaged_centers,
+        )
 
-        if has_real_stereo_ambiguity(molecule):
+        averaged = resonance_averaged_centers(molecule)
+        if averaged:
+            lines.append(describe_resonance_centers(molecule))
+
+        remaining = [i for i in audit.unassigned_centers if i not in set(averaged)]
+        if remaining and has_real_stereo_ambiguity(molecule):
             lines.append(
-                f"{len(audit.unassigned_centers)} stereocenter(s) left undefined: "
-                + ", ".join(f"atom {i}" for i in audit.unassigned_centers)
+                f"{len(remaining)} stereocenter(s) left undefined: "
+                + ", ".join(f"atom {i}" for i in remaining)
                 + " — this is ambiguous and will be refused unless you change the "
                 "stereo policy"
             )
-        else:
+        elif remaining:
             lines.append(
-                f"{len(audit.unassigned_centers)} atom(s) look stereogenic but are "
+                f"{len(remaining)} atom(s) look stereogenic but are "
                 "fixed by the ring system, so nothing is ambiguous"
             )
     return lines

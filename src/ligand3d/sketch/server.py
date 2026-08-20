@@ -404,6 +404,20 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+def _warm_catalog() -> None:
+    """Touch the things the first page load needs, off the request path.
+
+    Availability probing stats weight directories that may be on a network
+    filesystem. Doing it here means the latency lands before anyone is looking
+    rather than in front of the editor.
+    """
+    try:
+        backend_catalog()
+        slurm_status()
+    except Exception:  # warming is an optimization; never let it break startup
+        pass
+
+
 def serve(
     port: int = 0,
     open_browser: bool = True,
@@ -437,6 +451,11 @@ def serve(
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    # Work out what the backends can do while the browser is still fetching the
+    # page, so the first /api/config is answered from a warm cache rather than
+    # probing the filesystem with someone waiting on it.
+    threading.Thread(target=_warm_catalog, daemon=True).start()
 
     url = f"http://127.0.0.1:{port}/"
     if not quiet:

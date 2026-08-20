@@ -23,7 +23,12 @@ from rdkit import Chem
 from rdkit.Chem import rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
 
-from .molecule import Molecule, has_real_stereo_ambiguity, rdkit_quiet
+from .molecule import (
+    Molecule,
+    has_real_stereo_ambiguity,
+    rdkit_quiet,
+    resonance_averaged_centers,
+)
 
 # Highlights, chosen to stay legible on both light and dark backgrounds.
 _UNDEFINED = (0.95, 0.55, 0.15)   # amber: needs a decision
@@ -80,16 +85,22 @@ def depict(
 
     audit = molecule.stereo
     defined = tuple(audit.assigned_centers)
+
+    # A phosphate phosphorus is never something to configure, whether or not
+    # the rest of the molecule is ambiguous, so it is separated before the
+    # amber/grey split rather than swept into either.
+    averaged = tuple(resonance_averaged_centers(molecule))
+    rest = tuple(i for i in audit.unassigned_centers if i not in set(averaged))
     ambiguous = has_real_stereo_ambiguity(molecule)
-    undefined = tuple(audit.unassigned_centers) if ambiguous else ()
-    constrained = () if ambiguous else tuple(audit.unassigned_centers)
+    undefined = rest if ambiguous else ()
+    constrained = () if ambiguous else rest
 
     highlights: dict[int, tuple] = {}
     for idx in undefined:
         highlights[idx] = _UNDEFINED
     for idx, _ in defined:
         highlights[idx] = _DEFINED
-    for idx in constrained:
+    for idx in (*constrained, *averaged):
         highlights[idx] = _CONSTRAINED
 
     drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
@@ -123,6 +134,12 @@ def depict(
             f"{len(constrained)} atom(s) in grey look stereogenic but are fixed by "
             "the ring system"
         )
+    if averaged:
+        atoms = ", ".join(str(i) for i in averaged)
+        notes.append(
+            f"atom {atoms} in grey: the two terminal oxygens are equivalent by "
+            "resonance, so this is not a stereocenter"
+        )
     if defined:
         notes.append(f"{len(defined)} stereocenter(s) in green are already specified")
 
@@ -131,7 +148,7 @@ def depict(
         n_atoms=mol.GetNumAtoms(),
         undefined_centers=undefined,
         defined_centers=defined,
-        constrained_centers=constrained,
+        constrained_centers=(*constrained, *averaged),
         notes=notes,
     )
 
