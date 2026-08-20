@@ -238,3 +238,60 @@ class TestNothingElseImportsIt:
             capture_output=True, text=True,
         )
         assert check.returncode == 0, "importing ligand3d should not import the slurm module"
+
+
+class TestUntrustedValues:
+    """These fields reach a shell script, and one is a web text box.
+
+    A newline ends the `#SBATCH` comment it sits in and leaves whatever
+    follows in the script as a command, so the shapes are checked rather than
+    trusted.
+    """
+
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("walltime", "01:00:00\nrm -rf /"),
+            ("walltime", "; touch /tmp/pwned"),
+            ("walltime", "not-a-time"),
+            ("partition", "gpu\n#SBATCH --uid=0"),
+            ("memory", "16G$(whoami)"),
+            ("gpu_class", "small`id`"),
+            ("job_name", "a b\nevil"),
+            ("account", "IPD;evil"),
+        ],
+    )
+    def test_refused_before_a_script_is_written(self, field, value):
+        assert SlurmConfig(**{field: value}).check(), f"{field}={value!r} was accepted"
+
+    def test_a_bad_walltime_is_a_refusal_not_a_crash(self, tmp_path, monkeypatch):
+        # _walltime_minutes would raise ValueError on this; the caller should
+        # see the same clean error it gets for every other bad request.
+        monkeypatch.setattr("ligand3d.slurm._is_shared", lambda p: True)
+        payload = build_payload(from_smiles("CCO"), Settings(), tmp_path / "o.cif")
+        with pytest.raises(SlurmError, match="not a valid SLURM value"):
+            submit(payload, tmp_path / "w", SlurmConfig(walltime="soon"), dry_run=True)
+
+    def test_ordinary_values_still_pass(self):
+        assert SlurmConfig(
+            partition="gpu-bf", gpu_class="h200", memory="32G", walltime="2-00:00:00",
+            account="IPD", job_name="l3d-gabapentin",
+        ).check() == []
+
+
+class TestJobName:
+    def test_strips_what_slurm_would_not_accept(self):
+        from ligand3d.slurm import job_name_for
+
+        assert job_name_for("my ligand\n#SBATCH -x") == "l3d-myligandsbatch-x"
+
+    def test_survives_a_name_with_nothing_usable_in_it(self):
+        from ligand3d.slurm import job_name_for
+
+        assert job_name_for("////") == "l3d"
+
+    def test_result_always_passes_validation(self):
+        from ligand3d.slurm import job_name_for
+
+        for name in ("LIG", "my ligand", "////", "ünïcödé", "a" * 80):
+            assert SlurmConfig(job_name=job_name_for(name)).check() == []

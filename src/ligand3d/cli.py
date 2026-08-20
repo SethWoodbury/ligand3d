@@ -395,13 +395,14 @@ def _submit_to_slurm(
 ) -> None:
     """Queue the build instead of running it here."""
     from .slurm import (
-        SlurmConfig, build_payload, container_for, job_state, needs_gpu, submit, wait_for,
+        SlurmConfig, build_payload, container_for, job_name_for, job_state, needs_gpu,
+        submit, wait_for,
     )
 
     target = target.expanduser().resolve()
     config = SlurmConfig(
         partition=partition, gpu_class=gpu_class, walltime=walltime,
-        cpus=cpus, memory=memory, job_name=f"l3d-{mol.name.lower()}"[:24],
+        cpus=cpus, memory=memory, job_name=job_name_for(mol.name),
     )
     if not needs_gpu(settings.backend) and config.is_gpu:
         console.print(

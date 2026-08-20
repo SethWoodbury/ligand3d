@@ -437,7 +437,8 @@ def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
     import time
 
     from ..slurm import (
-        SlurmConfig, build_payload, container_for, job_state, needs_gpu, submit,
+        SlurmConfig, build_payload, container_for, job_name_for, job_state, needs_gpu,
+        submit,
     )
 
     options = job.slurm_options or {}
@@ -447,7 +448,7 @@ def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
         walltime=str(options.get("walltime") or "01:00:00"),
         cpus=int(options.get("cpus") or 4),
         memory=str(options.get("memory") or "16G"),
-        job_name=f"l3d-{molecule.name.lower()}"[:24],
+        job_name=job_name_for(molecule.name),
     )
     if not needs_gpu(settings.backend):
         job.say(

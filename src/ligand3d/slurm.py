@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -70,6 +71,16 @@ TERMINAL_STATES = {
     "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL",
     "PREEMPTED", "BOOT_FAIL", "DEADLINE", "OUT_OF_MEMORY",
 }
+
+
+def job_name_for(molecule_name: str) -> str:
+    """A SLURM job name built from a molecule name.
+
+    The molecule name comes from a filename or a drawing, so it can contain
+    anything; only the characters SLURM is happy with survive.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9_.+-]", "", molecule_name.lower())[:20]
+    return f"l3d-{cleaned}" if cleaned else "l3d"
 
 
 def slurm_available() -> bool:
@@ -154,17 +165,39 @@ class SlurmConfig:
         return f"gpu:{self.gpu_class}:{self.gpus}"
 
     def check(self) -> list[str]:
-        """Problems that would make the job fail or waste an allocation."""
+        """Problems that would make the job fail, waste an allocation, or worse.
+
+        These values reach a shell script, and one of them is a free-text box
+        on a web page. A newline in any of them would end the `#SBATCH` comment
+        and leave the rest sitting in the script as a command, so the shapes are
+        checked rather than trusted — and a value that cannot be parsed is
+        refused here instead of raising somewhere less helpful.
+        """
         problems: list[str] = []
-        if _walltime_minutes(self.walltime) < MIN_WALLTIME_MINUTES:
-            problems.append(
-                f"walltime {self.walltime} is below the {MIN_WALLTIME_MINUTES}-minute "
-                "minimum this scheduler enforces"
-            )
+
+        for label, value, pattern in (
+            ("partition", self.partition, r"[A-Za-z0-9_.-]+"),
+            ("gpu class", self.gpu_class, r"[A-Za-z0-9_.-]+"),
+            ("memory", self.memory, r"\d+[KMGT]?B?"),
+            ("account", self.account, r"[A-Za-z0-9_.-]*"),
+            ("job name", self.job_name, r"[A-Za-z0-9_.+-]+"),
+            ("walltime", self.walltime, r"(\d+-)?\d+(:\d+){0,2}"),
+        ):
+            if not re.fullmatch(pattern, value or ""):
+                problems.append(f"{label} {value!r} is not a valid SLURM value")
+
+        if not problems:  # only parseable once the shape is known good
+            if _walltime_minutes(self.walltime) < MIN_WALLTIME_MINUTES:
+                problems.append(
+                    f"walltime {self.walltime} is below the {MIN_WALLTIME_MINUTES}-minute "
+                    "minimum this scheduler enforces"
+                )
         if self.is_gpu and self.gpu_class not in ("small", "large", "h200"):
             problems.append(
                 f"gpu class {self.gpu_class!r} is not one of small, large, h200"
             )
+        if self.cpus < 1 or self.gpus < 0:
+            problems.append(f"cannot ask for {self.cpus} cpus and {self.gpus} gpus")
         return problems
 
 

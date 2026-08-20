@@ -432,15 +432,19 @@ CPU cores the job requested:
 |---|---|---|---|
 | gabapentin (29 atoms), 1 conformer | 4.94 s | 1.73 s | 2.9× |
 | gabapentin, 10-conformer search | 163 s | 48.9 s | 3.3× |
+| a 58-atom tripeptide, 1 conformer | 35.0 s | 7.65 s | 4.6× |
 
-**About three times faster, not thirty.** That is the number worth internalizing before
-building a workflow around this. A 29-atom graph does not come close to filling a GPU,
-and L-BFGS is inherently sequential — every step needs the forces from the one before, so
-there is nothing to overlap and the kernel launches dominate. Conformers are minimized one
-after another rather than batched, so a search scales the wall time rather than hiding it.
+**Single digits, not orders of magnitude.** That is the number worth internalizing before
+building a workflow around this. A 29-atom graph does not come close to filling a GPU, and
+L-BFGS is inherently sequential — every step needs the forces from the one before, so
+there is nothing to overlap and kernel launch latency dominates. Conformers are minimized
+one after another rather than batched, so a search multiplies the wall time rather than
+hiding it.
 
-Three minutes saved on a five-minute job is worth having when the queue is short. It is
-not worth having if the job would have finished before the scheduler found a node.
+The size dependence in that table is the useful part: the speedup roughly doubles between
+a 29-atom ligand and a 58-atom peptide, because a bigger graph gives the GPU more to do
+per launch. Extrapolate accordingly — small and rigid means submit locally, big and
+floppy means the queue is worth it.
 
 So the honest guidance is narrow:
 
