@@ -637,6 +637,8 @@ ligand3d fetch "3-Cyano-7-ethoxycoumarin"       # systematic name, resolved offl
 ligand3d fetch aspirin                          # trivial name, via PubChem
 ligand3d fetch cid:2244                         # straight to a PubChem record
 ligand3d fetch "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3"
+ligand3d fetch PLYNGSG --type peptide           # a sequence
+ligand3d fetch GGCAT   --type dna
 ligand3d fetch coumarin -o scaffold.sdf         # a 2D file to open in anything
 ligand3d fetch --templates                      # the built-in scaffolds
 ligand3d build "$(ligand3d fetch aspirin --smiles)" -o aspirin.cif
@@ -649,6 +651,7 @@ ligand3d build "$(ligand3d fetch aspirin --smiles)" -o aspirin.cif
 | parsing | SMILES, InChI | nothing |
 | **OPSIN** | systematic IUPAC names | `py2opsin` and a `java` |
 | **PubChem** | trivial names, trade names, CIDs | the network |
+| **sequences** | peptides, DNA, RNA — see below | nothing |
 
 These are complements, not fallbacks for each other, and `fetch` always says which one
 answered:
@@ -672,6 +675,69 @@ For the record, [InChI](https://github.com/IUPAC-InChI/InChI) does not help here
 structure *serialization*: it turns a structure into a canonical string and back. An InChI
 string is accepted as input, but InChI cannot turn `aspirin` into a structure. OPSIN and
 PubChem are the two things that do.
+
+### Sequences: peptides, DNA and RNA
+
+Typing `PLYNGSG` beats drawing fifty atoms, and an oligonucleotide is not
+realistically drawable at all. Pick the import type — **Peptide**, **DNA** or **RNA** —
+and type the sequence:
+
+```bash
+ligand3d fetch PLYNGSG   --type peptide      # N to C
+ligand3d fetch GGCAT     --type dna          # 5' to 3'
+ligand3d fetch AUGGC     --type rna
+ligand3d fetch "GS(KCX)PL" --type peptide    # carboxylated lysine, mid-chain
+ligand3d fetch --residues --type dna         # what codes exist
+```
+
+**Sequences are never auto-detected**, and that is deliberate: `GGCAT` is a perfectly
+good DNA oligo and an equally good pentapeptide. Guessing would sometimes silently build
+the wrong polymer, so the type has to be chosen. Auto-detect still handles everything
+else, and says so when a failed lookup looks like a sequence.
+
+RDKit builds the canonical alphabets, and is used directly for them. What it will not do
+is anything modified — a phosphoserine, a carboxylated lysine, an inosine — which is most
+of the reason to want this. Those come from a residue library here, and **that library is
+checked against RDKit rather than trusted**: every canonical residue and chain built by
+ligand3d is asserted to be the same molecule RDKit produces. A hand-written SMILES with an
+inverted stereocentre gives a plausible-looking peptide of the wrong enantiomer, and a
+misdrawn ribose gives a 2'-5' linked RNA; neither is something you would catch by eye, so
+the test suite catches them instead. Every nucleoside is additionally checked against its
+known molecular formula.
+
+Longer codes go in parentheses, following the **PDB Chemical Component Dictionary**, so
+`(SEP)` here is `SEP` in a PDB file. The sketcher lists the alphabet for whichever type is
+selected, with the full residue name on hover.
+
+| | codes |
+|---|---|
+| **peptide** | the 20, plus `U` (selenocysteine) and `O` (pyrrolysine) from the expanded alphabet |
+| **PTMs** | `SEP` `TPO` `PTR` phospho-Ser/Thr/Tyr · `KCX` carboxy-Lys · `ALY` acetyl-Lys · `MLZ` `MLY` `M3L` mono/di/tri-methyl-Lys · `TYS` sulfo-Tyr · `HYP` hydroxyproline · `PCA` pyroglutamate · `CSO` `CSD` `OCS` oxidised Cys · `NIY` nitro-Tyr · `CIR` citrulline |
+| **ncAAs** | `MSE` `SEC` `ORN` `NLE` `NVA` `ABA` `DAB` `AIB` `SAR` `HCS` `HSE` `PFF` `AZF` `BIF`, plus `DAL` `DVA` `DPR` for D residues |
+| **DNA** | `A C G T`, plus `U` `I` (deoxyinosine) `5MC` `8OG` `BRU` |
+| **RNA** | `A C G U`, plus `T` `I` (inosine) `PSU` (pseudouridine) `5MC` `6MA` `7MG` |
+
+Anything non-standard is reported rather than absorbed silently:
+
+```
+$ ligand3d fetch "GS(KCX)PL" --type peptide
+C23H40N6O9  CC(C)C[C@H](NC(=O)[C@@H]1CCCN1C(=O)[C@H](CCCCNC(=O)O)NC(=O)...
+  · non-standard residue(s): KCX = N6-carboxylysine
+  · built N terminus first, with a free amine and a free acid
+```
+
+IUPAC ambiguity codes are refused with the reason: `N` in a DNA sequence means *any base*,
+which is a set of sequences rather than a molecule.
+
+**Protonation.** Sequences are built neutral — free amine, free acid, protonated
+phosphates — and the pH from the Chemistry tab is applied when you build, not at import.
+Doing it in both places would protonate twice. The import notice says which will happen:
+with protonation set to *as drawn* it tells you the structure is neutral and how to change
+that, and with a pH set it says the termini and ionizable side chains will be adjusted to
+that pH. The default is 7.4.
+
+Chains are built with free hydroxyls at both ends and no terminal phosphate, matching what
+RDKit's uncapped flavors produce.
 
 ### Scaffolds
 

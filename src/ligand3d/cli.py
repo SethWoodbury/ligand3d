@@ -863,8 +863,24 @@ def fetch(
     offline: bool = typer.Option(
         False, "--offline", help="Do not query PubChem; names must be systematic."
     ),
+    kind: str = typer.Option(
+        "auto",
+        "--type",
+        "-t",
+        help="How to read the query: auto, smiles, inchi, name, cid, peptide, "
+        "dna, rna. Sequences are never auto-detected.",
+    ),
+    ph: Optional[float] = typer.Option(
+        None,
+        "--ph",
+        help="For a sequence, the pH the build will use. Only reported here; "
+        "nothing is protonated by fetch.",
+    ),
     templates: bool = typer.Option(
         False, "--templates", help="List the built-in scaffolds and exit."
+    ),
+    residues: bool = typer.Option(
+        False, "--residues", help="List the residue codes for --type peptide/dna/rna."
     ),
     timeout: float = typer.Option(12.0, "--timeout", help="Seconds to wait on PubChem."),
 ) -> None:
@@ -876,7 +892,30 @@ def fetch(
         ligand3d fetch "3-Cyano-7-ethoxycoumarin"
         ligand3d build "$(ligand3d fetch aspirin --smiles)" -o aspirin.cif
     """
-    from .resolve import ResolveError, opsin_available, resolve, template, template_list
+    from .resolve import (
+        KINDS, ResolveError, opsin_available, resolve, template, template_list,
+    )
+
+    if kind not in KINDS:
+        _fail(ValueError(f"--type must be one of: {', '.join(KINDS)}"))
+        return
+
+    if residues:
+        from .biopolymer import available_residues, residue_name
+
+        kinds = [kind] if kind in ("peptide", "dna", "rna") else ["peptide", "dna", "rna"]
+        for one in kinds:
+            table = Table(title=f"{one} residue codes", header_style="bold")
+            table.add_column("code")
+            table.add_column("residue")
+            for code in available_residues(one):
+                table.add_row(code, residue_name(code, one))
+            console.print(table)
+        console.print(
+            "\n[dim]One-letter codes go straight in the sequence; longer codes go "
+            "in parentheses, as in GS(KCX)PL.[/dim]"
+        )
+        return
 
     if templates:
         table = Table(title="built-in scaffolds", header_style="bold")
@@ -890,13 +929,14 @@ def fetch(
         return
 
     if not query:
-        _fail(ValueError("give a name, SMILES, InChI, or CID — or use --templates"))
+        _fail(ValueError("give a name, SMILES, InChI, CID, or sequence — or use --templates"))
         return
 
     try:
         known = {entry["name"] for entry in template_list()}
-        found = template(query) if query.strip().lower() in known else resolve(
-            query, allow_network=not offline, timeout=timeout
+        use_template = kind == "auto" and query.strip().lower() in known
+        found = template(query) if use_template else resolve(
+            query, allow_network=not offline, timeout=timeout, kind=kind, ph=ph
         )
     except ResolveError as exc:
         _fail(exc)

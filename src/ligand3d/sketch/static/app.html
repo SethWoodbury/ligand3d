@@ -57,7 +57,7 @@
      with 1fr instead. */
   main {
     flex: 1; display: grid; gap: 0; padding: .75rem;
-    grid-template-columns: var(--split, 58%) 0 minmax(0, 1fr);
+    grid-template-columns: var(--split, 63%) 0 minmax(0, 1fr);
     min-height: 0;
   }
   main > .col:first-child { padding-right: .75rem; }
@@ -99,7 +99,7 @@
   /* Drag the bottom edge to give the editor more room. `resize` needs a
      block container with overflow set, hence the wrapper. */
   #sketchWrap {
-    resize: vertical; overflow: hidden; min-height: 300px; height: 520px;
+    resize: vertical; overflow: hidden; min-height: 300px; height: 455px;
     position: relative;
   }
   #sketchHost { height: 100%; min-height: 0; }
@@ -274,8 +274,21 @@
     display: flex; gap: .4rem; align-items: center; flex-wrap: wrap;
     padding: .5rem .6rem .45rem; border-bottom: 1px solid var(--line);
   }
-  .importbar input[type=text] { flex: 1 1 15rem; min-width: 10rem; }
+  .importbar input[type=text] { flex: 1 1 14rem; min-width: 9rem; }
   .importbar select { flex: 0 0 9.5rem; }
+  .importbar #importKind { flex: 0 0 8.5rem; }
+  /* The residue alphabet for the selected sequence type. Hovering a code shows
+     the residue it stands for, which is the only practical way to offer fifty
+     of them without a second page. */
+  #importCodes {
+    font-size: .72rem; color: var(--muted); padding: 0 .6rem .4rem;
+    line-height: 1.5; max-height: 4.2rem; overflow-y: auto;
+  }
+  #importCodes b { color: var(--fg); font-weight: 620; }
+  #importCodes span {
+    font-family: ui-monospace, monospace; color: var(--fg); cursor: help;
+  }
+
   #importMsg {
     font-size: .76rem; padding: 0 .6rem; color: var(--muted);
   }
@@ -306,6 +319,9 @@
          at, so stretching this card to fill the column would fight that. -->
     <section class="card flush">
       <div class="importbar">
+        <select id="importKind" title="how to read what you typed">
+          <option value="auto">Auto-detect</option>
+        </select>
         <input type="text" id="importQuery" spellcheck="false"
                placeholder="import by name, SMILES, InChI or CID — e.g. 3-Cyano-7-ethoxycoumarin">
         <select id="importTemplate" title="start from a common organic scaffold">
@@ -313,6 +329,7 @@
         </select>
         <button class="ghost" id="importBtn">Import</button>
       </div>
+      <div id="importCodes" hidden></div>
       <div id="importMsg"></div>
       <div id="sketchWrap"><div id="sketchHost"></div></div>
       <div class="grip">
@@ -705,7 +722,7 @@ function setupSplitter() {
   // Clamped in pixels rather than percent: the options panel needs a real
   // width to stay usable, and what percentage that is depends on the window.
   const MIN_LEFT = 380;
-  const MIN_RIGHT = 390;
+  const MIN_RIGHT = 370;
 
   function moveTo(clientX) {
     const box = main.getBoundingClientRect();
@@ -783,8 +800,15 @@ function loadIntoEditor(molblock, smiles) {
   return true;
 }
 
+/* A sequence build honours the protonation setting on the Chemistry tab, so
+   the pH goes with the request and comes back explained in the notice. */
+function currentPh() {
+  return el("protonation").value === "as-drawn" ? null : Number(el("ph").value);
+}
+
 async function importQuery() {
   const query = el("importQuery").value.trim();
+  const kind = el("importKind").value || "auto";
   const msg = el("importMsg");
   if (!query) { msg.innerHTML = ""; return; }
 
@@ -795,7 +819,7 @@ async function importQuery() {
     const response = await fetch("/api/resolve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query }),
+      body: JSON.stringify({ query: query, kind: kind, ph: currentPh() }),
     });
     payload = await response.json();
   } catch (e) {
@@ -832,9 +856,52 @@ async function importQuery() {
   setStatus("imported — edit it as usual");
 }
 
+let IMPORT_RESIDUES = {};
+
+/* What the box is for changes completely with the type, so the placeholder
+   does too — "GGCAT" is not a hint that helps if you are looking up a name. */
+const KIND_PLACEHOLDERS = {
+  smiles: "a SMILES string — e.g. CCOc1ccc2cc(C#N)c(=O)oc2c1",
+  inchi: "an InChI string — e.g. InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3",
+  name: "a chemical name — e.g. 3-Cyano-7-ethoxycoumarin, or aspirin",
+  cid: "a PubChem CID — e.g. 2244",
+  peptide: "a peptide sequence, N to C — e.g. PLYNGSG, or GS(KCX)PL",
+  dna: "a DNA sequence, 5' to 3' — e.g. GGCAT, or GGC(5MC)AT",
+  rna: "an RNA sequence, 5' to 3' — e.g. AUGGC, or A(PSU)GGC",
+};
+
+function updateImportPlaceholder() {
+  const kind = el("importKind").value;
+  const box = el("importQuery");
+  if (KIND_PLACEHOLDERS[kind]) {
+    box.placeholder = KIND_PLACEHOLDERS[kind];
+  } else {
+    box.placeholder = CONFIG && CONFIG.templates_opsin === false
+      ? "import by name, SMILES, InChI or CID (systematic names need py2opsin + java)"
+      : "import by name, SMILES, InChI or CID — e.g. 3-Cyano-7-ethoxycoumarin";
+  }
+  // The residue table is only meaningful for a sequence type.
+  const codes = IMPORT_RESIDUES[kind];
+  el("importCodes").hidden = !codes;
+  if (codes) {
+    el("importCodes").innerHTML = "<b>" + codes.length + " codes:</b> " +
+      codes.map((r) => '<span title="' + esc(r.name) + '">' + esc(r.code) + "</span>")
+        .join(", ") +
+      " &nbsp;·&nbsp; one letter goes straight in, longer codes in parentheses";
+  }
+}
+
 function populateTemplates(data) {
+  const kinds = el("importKind");
+  kinds.innerHTML = (data.kinds || [{ id: "auto", label: "Auto-detect" }])
+    .map((k) => '<option value="' + k.id + '">' + esc(k.label) + "</option>").join("");
+  IMPORT_RESIDUES = data.residues || {};
+  if (CONFIG) CONFIG.templates_opsin = data.opsin;
+  kinds.addEventListener("change", updateImportPlaceholder);
+  updateImportPlaceholder();
+
   const select = el("importTemplate");
-  const options = ['<option value="">scaffold…</option>'];
+  const options = ['<option value="">Organic scaffold template…</option>'];
   (data.templates || []).forEach((t) => {
     options.push('<option value="' + t.name + '" title="' + esc(t.note) + '">' +
       t.name + "</option>");
@@ -842,13 +909,12 @@ function populateTemplates(data) {
   select.innerHTML = options.join("");
   select.addEventListener("change", () => {
     if (!select.value) return;
+    el("importKind").value = "auto";
+    updateImportPlaceholder();
     el("importQuery").value = select.value;
     importQuery();
     select.value = "";
   });
-  el("importQuery").placeholder = data.opsin
-    ? "import by name, SMILES, InChI or CID — e.g. 3-Cyano-7-ethoxycoumarin"
-    : "import by name, SMILES, InChI or CID (systematic names need py2opsin + java)";
 }
 
 el("importBtn").addEventListener("click", importQuery);

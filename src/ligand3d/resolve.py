@@ -74,6 +74,9 @@ class Resolved:
             "opsin": "derived from the name by OPSIN, offline, from IUPAC rules",
             "pubchem": f"looked up in PubChem (CID {self.cid})",
             "template": "a built-in scaffold",
+            "peptide": "assembled from the peptide sequence you typed",
+            "dna": "assembled from the DNA sequence you typed, 5' to 3'",
+            "rna": "assembled from the RNA sequence you typed, 5' to 3'",
         }.get(self.source, self.source)
 
     def molblock(self) -> str:
@@ -92,6 +95,7 @@ class Resolved:
             "smiles": self.smiles,
             "molblock": self.molblock(),
             "source": self.source,
+            "kind_label": KIND_LABELS.get(self.source, self.source),
             "provenance": self.provenance,
             "query": self.query,
             "name": self.name,
@@ -290,23 +294,77 @@ def from_pubchem(query: str, timeout: float = DEFAULT_TIMEOUT) -> Resolved | Non
     )
 
 
+#: What an import can be read as. "auto" tries the routes in order; the rest
+#: say outright, which is the only way to settle a query that two routes could
+#: both answer differently — `GGCAT` is a DNA oligo and also a peptide.
+KINDS: tuple[str, ...] = (
+    "auto", "smiles", "inchi", "name", "cid", "peptide", "dna", "rna",
+)
+
+KIND_LABELS: dict[str, str] = {
+    "auto": "Auto-detect",
+    "smiles": "SMILES",
+    "inchi": "InChI",
+    "name": "Chemical name",
+    "cid": "PubChem CID",
+    "peptide": "Peptide sequence",
+    "dna": "DNA sequence",
+    "rna": "RNA sequence",
+}
+
+_SEQUENCE_KINDS = ("peptide", "dna", "rna")
+
+
+def from_sequence(text: str, kind: str, ph: float | None = None) -> Resolved:
+    """Build a peptide, DNA or RNA chain from its sequence."""
+    from .biopolymer import SequenceError, build
+
+    try:
+        built = build(text, kind, ph=ph)
+    except SequenceError as exc:
+        raise ResolveError(str(exc)) from exc
+
+    canonical, formula = _canonical(built.smiles)
+    return Resolved(
+        smiles=canonical,
+        source=kind,
+        query=text,
+        name=built.description,
+        formula=formula,
+        notes=list(built.notes),
+    )
+
+
 def resolve(
     query: str,
     allow_network: bool = True,
     timeout: float = DEFAULT_TIMEOUT,
+    kind: str = "auto",
+    ph: float | None = None,
 ) -> Resolved:
     """Turn a query into a structure, trying the cheapest route that can work.
 
-    Prefix the query with `smiles:`, `inchi:`, `name:`, or `cid:` to force one.
+    `kind` forces a route. Prefixing the query with `smiles:`, `inchi:`,
+    `name:`, or `cid:` does the same thing and takes precedence.
+
+    Sequences are never auto-detected. `GGCAT` is a valid DNA oligo and an
+    equally valid pentapeptide, and guessing would sometimes silently build the
+    wrong polymer — so a sequence has to be asked for.
     """
     text = query.strip()
     if not text:
         raise ResolveError("nothing to look up")
+    if kind not in KINDS:
+        raise ResolveError(f"unknown import type {kind!r}; use one of {KINDS}")
 
     lowered = text.lower()
     forced = next((p for p in _PREFIXES if lowered.startswith(p)), None)
     if forced:
         text = text[len(forced):].strip()
+    elif kind in _SEQUENCE_KINDS:
+        return from_sequence(text, kind, ph=ph)
+    elif kind != "auto":
+        forced = f"{kind}:"
 
     if forced == "smiles:":
         found = from_smiles_text(text)
@@ -365,10 +423,29 @@ def resolve(
 
     if network_error is not None and not tried[:-1]:
         raise network_error
-    raise ResolveError(
-        f"could not resolve {query!r}. " + "; ".join(tried) + ". "
-        "Try a SMILES, or prefix the query with smiles:, inchi:, name:, or cid:."
-    )
+
+    hint = "Try a SMILES, or prefix the query with smiles:, inchi:, name:, or cid:."
+    if _could_be_a_sequence(text):
+        hint = (
+            "This looks like it could be a sequence. Sequences are never guessed, "
+            "because the same letters can be a peptide and an oligonucleotide — "
+            "choose Peptide, DNA or RNA as the import type to build it as one."
+        )
+    raise ResolveError(f"could not resolve {query!r}. " + "; ".join(tried) + ". " + hint)
+
+
+def _could_be_a_sequence(text: str) -> bool:
+    """Whether a failed lookup was plausibly someone pasting a sequence.
+
+    Only chooses which advice to print once everything else has failed, so it
+    can afford to be generous — but it asks the real question, which is whether
+    every letter is actually a residue code.
+    """
+    bare = re.sub(r"\([^)]*\)|[\s\-*.,:0-9]", "", text).upper()
+    if len(bare) < 3 or not bare.isalpha():
+        return False
+    residues = set("ACDEFGHIKLMNPQRSTVWYUO")  # the peptide alphabet covers ACGTU
+    return set(bare) <= residues
 
 
 # A few scaffolds worth starting from, for when the point is to draw a

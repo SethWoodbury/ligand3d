@@ -193,12 +193,23 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         if path == "/api/templates":
-            from ..resolve import opsin_available, template_list
+            from ..biopolymer import available_residues, residue_name
+            from ..resolve import KIND_LABELS, KINDS, opsin_available, template_list
 
             self._json(
                 {
                     "templates": template_list(),
                     "opsin": opsin_available(),
+                    "kinds": [
+                        {"id": k, "label": KIND_LABELS.get(k, k)} for k in KINDS
+                    ],
+                    "residues": {
+                        kind: [
+                            {"code": c, "name": residue_name(c, kind)}
+                            for c in available_residues(kind)
+                        ]
+                        for kind in ("peptide", "dna", "rna")
+                    },
                 }
             )
             return
@@ -277,19 +288,31 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         carry, no network — so it comes back as a message to read rather than an
         error state.
         """
-        from ..resolve import ResolveError, resolve, template, template_list
+        from ..resolve import KINDS, ResolveError, resolve, template, template_list
 
         query = str(data.get("query") or "").strip()
         if not query:
             self._json({"error": "nothing to look up"}, 400)
             return
+        kind = str(data.get("kind") or "auto")
+        if kind not in KINDS:
+            self._json({"error": f"unknown import type {kind!r}"}, 400)
+            return
+
+        ph = data.get("ph")
+        try:
+            ph = float(ph) if ph not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            ph = None
 
         try:
             known = {entry["name"] for entry in template_list()}
             found = (
                 template(query)
-                if query.lower() in known
-                else resolve(query, allow_network=not data.get("offline"))
+                if kind == "auto" and query.lower() in known
+                else resolve(
+                    query, allow_network=not data.get("offline"), kind=kind, ph=ph
+                )
             )
             self._json(found.to_json())
         except ResolveError as exc:
