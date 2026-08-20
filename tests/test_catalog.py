@@ -199,3 +199,61 @@ class TestModelsPage:
         from ligand3d.sketch import server as srv
 
         assert '/models' in srv.APP_PAGE.read_text()
+
+
+class TestTimingHonesty:
+    """Speeds must be marked measured or estimated, and never silently guessed.
+
+    The first version of this table carried estimates presented as measurements
+    and had MACE-POLAR at 4/8/16 s when it actually takes 23/57/114 s — wrong by
+    six- to seven-fold, in the flattering direction. The `measured` flag exists
+    so that mistake is visible rather than plausible.
+    """
+
+    def test_every_model_declares_a_speed(self):
+        for spec in MODELS:
+            assert spec.speed, f"{spec.key} has no speed"
+
+    def test_estimates_say_so_in_the_text(self):
+        for spec in MODELS:
+            if not spec.measured:
+                assert "estimate" in spec.speed.lower(), (
+                    f"{spec.key} is not measured but does not say so: {spec.speed!r}"
+                )
+
+    def test_measured_values_are_not_hedged(self):
+        for spec in MODELS:
+            if spec.measured:
+                assert "estimate" not in spec.speed.lower()
+                assert "~" not in spec.speed, f"{spec.key} claims measured but hedges"
+
+    def test_models_that_run_here_are_measured(self):
+        """Anything installable in this environment should have real numbers."""
+        for spec in MODELS:
+            if spec.family in ("mace", "mace-polar"):
+                assert spec.measured, f"{spec.key} could be timed but was not"
+
+    def test_polar_is_recorded_as_much_slower_than_plain_mace(self):
+        """The long-range electrostatics cost roughly an order of magnitude."""
+        plain = MODELS_BY_KEY["mace-off"]
+        polar = MODELS_BY_KEY["mace-polar"]
+        assert plain.measured and polar.measured
+
+        def seconds(text: str) -> float:
+            import re
+
+            value = float(re.search(r"[\d.]+", text).group())
+            return value / 1000 if "ms" in text else value
+
+        assert seconds(polar.speed) > 5 * seconds(plain.speed)
+
+    def test_the_catalog_carries_the_flag(self):
+        by_id = {m.id: m for m in build_catalog()}
+        assert by_id["mace-off"].measured
+        assert not by_id["esen"].measured
+        assert by_id["mmff94"].measured
+
+    def test_slow_loading_models_record_it(self):
+        """aimnet2 spends 14 s constructing itself and 0.6 s minimizing."""
+        by_id = {m.id: m for m in build_catalog()}
+        assert by_id["aimnet2"].load_seconds > 5

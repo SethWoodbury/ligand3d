@@ -551,7 +551,9 @@ def models(
         )
         table.add_row(
             method.id, method.family, charge,
-            method.spin, method.solvent, method.speed, method.memory, status,
+            method.spin, method.solvent,
+            method.speed if method.measured else f"[dim]{method.speed}[/dim]",
+            method.memory, status,
         )
     console.print(table)
     console.print(
@@ -560,8 +562,17 @@ def models(
         "that lost a proton.[/dim]"
     )
     console.print(
-        f"[dim]speed is wall time for a ~30-atom molecule on CPU, measured here.[/dim]"
+        "[dim]speed is a full minimization of gabapentin (29 atoms) on CPU with 8 threads. "
+        "Dimmed values are estimates for models that cannot run in this environment; "
+        "everything else was timed here.[/dim]"
     )
+    slow = [m for m in methods if m.load_seconds >= 5]
+    if slow:
+        console.print(
+            "[dim]first-call load cost, separate from the minimization: "
+            + ", ".join(f"{m.id} {m.load_seconds:.0f}s" for m in slow)
+            + "[/dim]"
+        )
 
     if verbose:
         for method in methods:

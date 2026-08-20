@@ -69,7 +69,21 @@ class ModelSpec:
     spin_aware: bool = False
     """Consumes spin multiplicity as an input, not just total charge."""
     speed: str = ""
-    """Rough wall time for a drug-sized molecule on CPU, measured here."""
+    """Wall time for a full minimization of gabapentin (29 atoms) on CPU.
+
+    See `measured`: some of these are timed on this machine and some are
+    estimates for models that cannot run in this environment.
+    """
+    measured: bool = False
+    """True if `speed` was timed here rather than extrapolated.
+
+    Worth tracking separately. The first estimates in this table were scaled
+    from model size and were wrong by up to seven-fold — MACE-POLAR medium was
+    guessed at 8 s and actually takes 57 s, because the long-range electrostatics
+    it adds are not free.
+    """
+    load_seconds: float = 0.0
+    """One-off cost of building the calculator, separate from the minimization."""
     memory: str = ""
     accuracy: str = ""
     notes: str = ""
@@ -104,104 +118,104 @@ MODELS: tuple[ModelSpec, ...] = (
     # --- MACE, organic molecules ------------------------------------------
     ModelSpec("mace-off", "mace", _hf("ACEsuit--mace-off-23", "MACE-OFF23_medium.model"),
               "MACE-OFF23 medium. Neutral organic molecules.", organic_only=True, approx_mb=18,
-              repo="ACEsuit/mace-off-23", training="SPICE, neutral organics (wB97M-D3)", speed="~7 s", memory="~1 GB", accuracy="very good for neutral organics", notes="no total-charge input"),
+              repo="ACEsuit/mace-off-23", training="SPICE, neutral organics (wB97M-D3)", speed="6.8 s", measured=True, load_seconds=0.5, memory="~1 GB", accuracy="very good for neutral organics", notes="no total-charge input"),
     ModelSpec("mace-off-small", "mace", _hf("ACEsuit--mace-off-23", "MACE-OFF23_small.model"),
               "MACE-OFF23 small. Fastest of the OFF23 set.", organic_only=True, approx_mb=7,
-              repo="ACEsuit/mace-off-23", training="SPICE, neutral organics", speed="~3 s", memory="~0.8 GB", accuracy="a little below medium", notes="fastest MACE-OFF"),
+              repo="ACEsuit/mace-off-23", training="SPICE, neutral organics", speed="2.0 s", measured=True, load_seconds=3.6, memory="~0.8 GB", accuracy="a little below medium", notes="fastest MACE-OFF"),
     ModelSpec("mace-off-large", "mace", _hf("ACEsuit--mace-off-23", "MACE-OFF23_large.model"),
               "MACE-OFF23 large. Most accurate of the OFF23 set.", organic_only=True, approx_mb=55,
-              repo="ACEsuit/mace-off-23", training="SPICE, neutral organics", speed="~15 s", memory="~1.5 GB", accuracy="best of the OFF23 set", notes="slowest MACE-OFF"),
+              repo="ACEsuit/mace-off-23", training="SPICE, neutral organics", speed="31 s", measured=True, load_seconds=9.3, memory="~1.5 GB", accuracy="best of the OFF23 set", notes="slowest MACE-OFF"),
     ModelSpec("mace-off-24", "mace", _hf("ACEsuit--mace-off-24", "MACE-OFF24_medium.model"),
               "MACE-OFF24 medium. Successor to OFF23.", organic_only=True, approx_mb=18,
-              repo="ACEsuit/mace-off-24", training="SPICE v2, wider coverage", speed="~7 s", memory="~1 GB", accuracy="successor to OFF23", notes="no total-charge input"),
+              repo="ACEsuit/mace-off-24", training="SPICE v2, wider coverage", speed="7.0 s", measured=True, load_seconds=0.5, memory="~1 GB", accuracy="successor to OFF23", notes="no total-charge input"),
     # --- MACE, charge-aware -----------------------------------------------
     ModelSpec("mace-omol", "mace",
               _hf("ACEsuit--mace-omol-0", "MACE-omol-0-extra-large-1024.model"),
               "MACE trained on OMol25. Consumes total charge.",
               takes_charge=True, approx_mb=422,
-              repo="ACEsuit/mace-omol-0", training="OMol25 (charged and open-shell)", speed="~20 s", memory="~3 GB", accuracy="high; the charge-aware MACE", notes="extra-large 1024-channel; slow on CPU"),
+              repo="ACEsuit/mace-omol-0", training="OMol25 (charged and open-shell)", speed="28 s", measured=True, load_seconds=5.2, memory="~3 GB", accuracy="high; the charge-aware MACE", notes="extra-large 1024-channel; slow on CPU"),
     # --- MACE, multi-head -------------------------------------------------
     ModelSpec("mace-mh", "mace", _hf("ACEsuit--mace-mh-0", "mace-mh-0.model"),
               "MACE multi-head (omol head). Fast and general, ignores charge.",
               head="omol", approx_mb=40,
-              repo="ACEsuit/mace-mh-0", training="multi-head: omol, SPICE, MatPES, OMat, OC20", speed="~2 s", memory="~1 GB", accuracy="good general purpose", notes="omol head; ignores charge despite the head name"),
+              repo="ACEsuit/mace-mh-0", training="multi-head: omol, SPICE, MatPES, OMat, OC20", speed="8.4 s", measured=True, load_seconds=0.4, memory="~1 GB", accuracy="good general purpose", notes="omol head; ignores charge despite the head name"),
     ModelSpec("mace-mh-1", "mace", _hf("ACEsuit--mace-mh-1", "mace-mh-1.model"),
               "MACE multi-head v1 (omol head).", head="omol", approx_mb=59,
-              repo="ACEsuit/mace-mh-1", training="multi-head v1", speed="~2 s", memory="~1 GB", accuracy="good general purpose", notes="omol head selected"),
+              repo="ACEsuit/mace-mh-1", training="multi-head v1", speed="12 s", measured=True, load_seconds=1.5, memory="~1 GB", accuracy="good general purpose", notes="omol head selected"),
     ModelSpec("mace-mh-spice", "mace", _hf("ACEsuit--mace-mh-0", "mace-mh-0.model"),
               "MACE multi-head, SPICE wB97M head. Organic chemistry.",
               head="spice_wB97M", approx_mb=40,
-              repo="ACEsuit/mace-mh-0", training="multi-head, SPICE wB97M head", speed="~2 s", memory="~1 GB", accuracy="organic chemistry", notes="spice_wB97M head selected"),
+              repo="ACEsuit/mace-mh-0", training="multi-head, SPICE wB97M head", speed="7.9 s", measured=True, load_seconds=0.5, memory="~1 GB", accuracy="organic chemistry", notes="spice_wB97M head selected"),
     # --- MACE, materials --------------------------------------------------
     ModelSpec("mace-mp", "mace",
               _hf("ACEsuit--mace-mp-0", "MACE-matpes-r2scan-omat-ft.model"),
               "MACE-MP-0 universal potential. Broad elements, ignores charge.",
               approx_mb=79,
-              repo="ACEsuit/mace-mp-0", training="MatPES r2SCAN + OMat fine-tune", speed="~5 s", memory="~1 GB", accuracy="built for periodic solids, not molecules", notes="broadest elements; for inorganics"),
+              repo="ACEsuit/mace-mp-0", training="MatPES r2SCAN + OMat fine-tune", speed="7.8 s", measured=True, load_seconds=1.1, memory="~1 GB", accuracy="built for periodic solids, not molecules", notes="broadest elements; for inorganics"),
     # --- fairchem / OMol25, all charge- and spin-aware ---------------------
     ModelSpec("esen", "fairchem",
               _hf("facebook--esen-sm-conserving-all-omol", "esen_sm_conserving_all.pt"),
               "eSEN small, conserving. OMol25; excellent accuracy per second.",
               takes_charge=True, approx_mb=51,
-              repo="facebook/esen-sm-conserving-all-omol", training="OMol25 (wB97M-V)", spin_aware=True, speed="~1 s", memory="~1 GB", accuracy="best accuracy per second here", notes="energy-conserving: forces are exact gradients"),
+              repo="facebook/esen-sm-conserving-all-omol", training="OMol25 (wB97M-V)", spin_aware=True, speed="~1 s (estimate)", measured=False, load_seconds=0.0, memory="~1 GB", accuracy="best accuracy per second here", notes="energy-conserving: forces are exact gradients"),
     ModelSpec("esen-sm-direct", "fairchem",
               _hf("facebook--esen-sm-direct-all-omol", "esen_sm_direct_all.pt"),
               "eSEN small, direct force prediction. Faster, not energy-conserving.",
               takes_charge=True, approx_mb=51,
-              repo="facebook/esen-sm-direct-all-omol", training="OMol25", spin_aware=True, speed="~0.7 s", memory="~1 GB", accuracy="close to conserving, a little faster", notes="direct forces; not energy-conserving"),
+              repo="facebook/esen-sm-direct-all-omol", training="OMol25", spin_aware=True, speed="~0.7 s (estimate)", measured=False, load_seconds=0.0, memory="~1 GB", accuracy="close to conserving, a little faster", notes="direct forces; not energy-conserving"),
     ModelSpec("esen-md-direct", "fairchem",
               _hf("facebook--esen-md-direct-all-omol", "esen_md_direct_all.pt"),
               "eSEN medium, direct.", takes_charge=True, approx_mb=406,
-              repo="facebook/esen-md-direct-all-omol", training="OMol25", spin_aware=True, speed="~3 s", memory="~2 GB", accuracy="better than the small models", notes="direct forces"),
+              repo="facebook/esen-md-direct-all-omol", training="OMol25", spin_aware=True, speed="~3 s (estimate)", measured=False, load_seconds=0.0, memory="~2 GB", accuracy="better than the small models", notes="direct forces"),
     ModelSpec("uma-s", "fairchem",
               _hf("facebook--fairchem-uma-s-1p1", "uma-s-1p1.pt"),
               "UMA small 1.1. Universal model; omol task.",
               takes_charge=True, approx_mb=1170,
-              repo="facebook/fairchem-uma-s-1p1", training="UMA multi-domain, omol task", spin_aware=True, speed="~12 s", memory="~4 GB", accuracy="strong across chemistry and materials", notes="first load is slow"),
+              repo="facebook/fairchem-uma-s-1p1", training="UMA multi-domain, omol task", spin_aware=True, speed="~12 s (estimate)", measured=False, load_seconds=0.0, memory="~4 GB", accuracy="strong across chemistry and materials", notes="first load is slow"),
     ModelSpec("uma-s-1p2", "fairchem",
               _hf("facebook--fairchem-uma-s-1p2", "uma-s-1p2.pt"),
               "UMA small 1.2.", takes_charge=True, approx_mb=2330,
-              repo="facebook/fairchem-uma-s-1p2", training="UMA 1.2", spin_aware=True, speed="~12 s", memory="~6 GB", accuracy="newer UMA small"),
+              repo="facebook/fairchem-uma-s-1p2", training="UMA 1.2", spin_aware=True, speed="~12 s (estimate)", measured=False, load_seconds=0.0, memory="~6 GB", accuracy="newer UMA small"),
     ModelSpec("uma-sm", "fairchem",
               _hf("facebook--fairchem-uma-sm", "uma_sm.pt"),
               "UMA sm.", takes_charge=True, approx_mb=1170,
-              repo="facebook/fairchem-uma-sm", training="UMA sm", spin_aware=True, speed="~12 s", memory="~4 GB"),
+              repo="facebook/fairchem-uma-sm", training="UMA sm", spin_aware=True, speed="~12 s (estimate)", measured=False, load_seconds=0.0, memory="~4 GB"),
     ModelSpec("uma-m", "fairchem",
               _hf("facebook--fairchem-uma-m-1p1", "uma-m-1p1.pt"),
               "UMA medium 1.1. Largest and slowest; needs real memory.",
               takes_charge=True, approx_mb=11170,
-              repo="facebook/fairchem-uma-m-1p1", training="UMA medium", spin_aware=True, speed="minutes", memory="~24 GB", accuracy="most accurate UMA", notes="11 GB of weights; needs real memory"),
+              repo="facebook/fairchem-uma-m-1p1", training="UMA medium", spin_aware=True, speed="minutes (estimate)", measured=False, load_seconds=0.0, memory="~24 GB", accuracy="most accurate UMA", notes="11 GB of weights; needs real memory"),
     ModelSpec("allscaip", "fairchem",
               _hf("facebook--allscaip-omol102m-md-cons", "AllScAIP-OMol102M-md-cons.pt"),
               "AllScAIP OMol102M, conserving.", takes_charge=True, approx_mb=688,
-              repo="facebook/allscaip-omol102m-md-cons", training="OMol25 102M", spin_aware=True, speed="~7 s", memory="~3 GB", accuracy="high", notes="energy-conserving"),
+              repo="facebook/allscaip-omol102m-md-cons", training="OMol25 102M", spin_aware=True, speed="~7 s (estimate)", measured=False, load_seconds=0.0, memory="~3 GB", accuracy="high", notes="energy-conserving"),
     # --- MACE-POLAR: real, but needs the patched fork ----------------------
     ModelSpec("mace-polar-s", "mace-polar",
               _hf("ACEsuit--mace-polar-1-beta", "MACE-POLAR-1-S.model"),
               "MACE-POLAR small. Explicit long-range electrostatics.",
               approx_mb=33, repo="ACEsuit/mace-polar-1-beta",
               training="polarizable dataset with explicit long-range terms",
-              speed="~4 s", memory="~1 GB",
+              speed="23 s", measured=True, load_seconds=0.2, memory="~1 GB",
               accuracy="models the long-range electrostatics other MACE models omit",
-              notes="needs the patched MACE fork plus graph_longrange"),
+              notes="needs the patched MACE fork plus graph_longrange; the reciprocal-space electrostatics make it several times slower than plain MACE"),
     ModelSpec("mace-polar", "mace-polar",
               _hf("ACEsuit--mace-polar-1-beta", "MACE-POLAR-1-M.model"),
               "MACE-POLAR medium. Explicit long-range electrostatics.",
               approx_mb=68, repo="ACEsuit/mace-polar-1-beta",
               training="polarizable dataset with explicit long-range terms",
-              speed="~8 s", memory="~1.5 GB", accuracy="the usual POLAR pick",
-              notes="needs the patched MACE fork plus graph_longrange"),
+              speed="57 s", measured=True, load_seconds=0.2, memory="~1.5 GB", accuracy="the usual POLAR pick",
+              notes="needs the patched MACE fork plus graph_longrange; the reciprocal-space electrostatics make it several times slower than plain MACE"),
     ModelSpec("mace-polar-l", "mace-polar",
               _hf("ACEsuit--mace-polar-1-beta", "MACE-POLAR-1-L.model"),
               "MACE-POLAR large. Explicit long-range electrostatics.",
               approx_mb=130, repo="ACEsuit/mace-polar-1-beta",
               training="polarizable dataset with explicit long-range terms",
-              speed="~16 s", memory="~2 GB", accuracy="best of the POLAR set",
-              notes="needs the patched MACE fork plus graph_longrange"),
+              speed="114 s", measured=True, load_seconds=0.3, memory="~2 GB", accuracy="best of the POLAR set",
+              notes="needs the patched MACE fork plus graph_longrange; the reciprocal-space electrostatics make it several times slower than plain MACE"),
     ModelSpec("allscaip-direct", "fairchem",
               _hf("facebook--allscaip-omol102m-md-d", "AllScAIP-OMol102M-md-d.pt"),
               "AllScAIP OMol102M, direct.", takes_charge=True, approx_mb=695,
-              repo="facebook/allscaip-omol102m-md-d", training="OMol25 102M", spin_aware=True, speed="~5 s", memory="~3 GB", accuracy="high", notes="direct forces"),
+              repo="facebook/allscaip-omol102m-md-d", training="OMol25 102M", spin_aware=True, speed="~5 s (estimate)", measured=False, load_seconds=0.0, memory="~3 GB", accuracy="high", notes="direct forces"),
 )
 
 MODELS_BY_KEY: dict[str, ModelSpec] = {m.key: m for m in MODELS}

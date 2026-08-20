@@ -223,6 +223,164 @@ ligand3d build "<smiles>" --backend mmff94,mace-polar
 `ligand3d doctor` and `ligand3d models` list these with the same explanation rather than
 pretending they aren't there.
 
+## How a minimization actually works
+
+Two separate things are involved, and it helps to keep them apart.
+
+**The potential** answers one question: given these atomic positions, what is the energy,
+and what is the force on each atom? That is all MMFF94, GFN2-xTB, MACE, or AIMNet2 ever
+do. They differ enormously in how they answer it, and not at all in what they are asked.
+
+**The optimizer** takes those forces and decides where to move the atoms next. ligand3d
+uses **L-BFGS** for every backend except the RDKit force fields.
+
+The loop is just:
+
+```
+positions ──▶ potential ──▶ energy + forces ──▶ L-BFGS proposes new positions ──▶ repeat
+                                                        │
+                                              stop when max force < fmax
+```
+
+### L-BFGS, briefly
+
+L-BFGS is a quasi-Newton method. Steepest descent would step straight downhill along the
+force, which zig-zags badly in a narrow valley — and a molecule's energy surface is full of
+narrow valleys, because stretching a bond costs far more than rotating a torsion. Newton's
+method would fix that using the Hessian (all second derivatives), but for a 29-atom
+molecule that is an 87×87 matrix that nobody wants to compute or invert every step.
+
+L-BFGS splits the difference: it *approximates* the inverse Hessian from the last handful
+of position and gradient changes — the "limited memory" part — and never forms the matrix.
+The result converges in tens of steps where steepest descent would take thousands, at
+almost no extra cost per step. Every timing in this README is dominated by the potential,
+not by L-BFGS.
+
+ligand3d uses `ase.optimize.LBFGS` and stops at `fmax = 0.05 eV/Å` by default. The RDKit
+force fields are the exception: they use RDKit's own C++ minimizer, because round-tripping
+coordinates through ASE for a four-millisecond job costs more than the job.
+
+### Where ACE comes in — and where it does not
+
+ACE (Atomic Cluster Expansion) is **not** an optimizer and does not drive anything. It is
+a way of *describing an atom's environment*: a systematic expansion in body order — how
+this atom sits relative to one neighbour, then pairs of neighbours, then triples — built
+from a basis of radial functions and spherical harmonics. Its appeal is that it is
+systematic: turn up the body order and the expansion gets more expressive in a controlled
+way, rather than by adding another ad-hoc term.
+
+**MACE** uses that idea inside a message-passing neural network. Each atom carries a
+feature vector; neighbours exchange messages along edges; and the many-body ACE features
+are formed by symmetric contraction of tensor products of those messages. The pieces are
+visible in the code — `EquivariantProductBasisBlock`, `SymmetricContraction` — and
+"equivariant" is the load-bearing word: rotate the molecule and the predicted forces
+rotate with it, exactly, by construction rather than by training. A model that has to
+*learn* rotational symmetry from data wastes capacity on it and never gets it exactly
+right.
+
+So: ACE is the functional form of the energy. L-BFGS moves the atoms. They are unrelated
+parts of the machine.
+
+### What the other tiers are doing
+
+- **MMFF94 / UFF** — a hand-fitted sum of springs: bond stretches, angle bends, torsions,
+  van der Waals, electrostatics from fixed partial charges. The bond list is fixed at
+  setup, which is why these cannot move a proton and why a zwitterion is safe with them.
+  No electrons anywhere in the model.
+- **GFN-FF** — the same idea, but with parameters generated across the periodic table and
+  a topology perceived on the fly.
+- **GFN1/GFN2-xTB** — genuinely semi-empirical *quantum* methods. They solve a simplified
+  self-consistent tight-binding problem with a minimal basis, so electrons are represented
+  and charge can redistribute. That is why they can break and form bonds, why they need a
+  total charge, and why they are the only tier here with an implicit solvent model.
+- **AIMNet2, MACE, eSEN, UMA** — neural potentials trained to reproduce DFT energies and
+  forces. No electrons at run time; they have learned the *result* of the electronic
+  structure calculation. Fast, and only as trustworthy as the chemistry in their training
+  set.
+
+### MACE-POLAR is a different shape
+
+Standard MACE is strictly local: each atom sees neighbours inside a cutoff, usually 5–6 Å.
+That is fine for bonded geometry and terrible for anything where a charge on one end of
+the molecule matters to the other end, because Coulomb interactions fall off as 1/r and
+simply do not fit inside a cutoff.
+
+MACE-POLAR (`PolarMACE`, a subclass of the standard `ScaleShiftMACE`) adds an explicit
+long-range term. It predicts atomic multipoles — charges, and optionally dipoles and
+quadrupoles — then evaluates the electrostatics in reciprocal space with a k-space cutoff,
+Ewald style. It can also run the field response to self-consistency, iterating until the
+induced multipoles stop changing, which is what makes it *polarizable* rather than just
+long-range. That machinery lives in the separate `graph_longrange` package
+([graph_electrostatics](https://github.com/WillBaldwin0/graph_electrostatics)).
+
+**This is not free**, and it is the honest answer to "does it really run that fast?": it
+does not. Measured on this machine, MACE-POLAR is roughly ten times slower per L-BFGS step
+than plain MACE-OFF, because every step now includes a reciprocal-space sum and possibly a
+self-consistency loop:
+
+| model | per L-BFGS step | full minimization |
+|---|---|---|
+| `mace-off-small` | 0.075 s | 2.0 s |
+| `mace-off` | 0.25 s | 6.8 s |
+| `mace-polar-s` | 0.74 s | 23 s |
+| `mace-polar` | 1.8 s | 57 s |
+| `mace-polar-l` | 3.6 s | 114 s |
+
+An earlier version of this table carried estimates rather than measurements and had
+MACE-POLAR at 4/8/16 s — wrong by a factor of six to seven, in the flattering direction.
+Everything above was timed.
+
+## Timings
+
+All numbers are a **full minimization of gabapentin (29 atoms) on CPU**, no GPU involved:
+a 13th-gen Intel i5-13500 with `OMP_NUM_THREADS=8`, torch's `+cpu` build. Roughly 26–32
+L-BFGS steps in every case, so the per-step cost is what actually differs.
+
+| backend | minimization | first-call load | note |
+|---|---|---|---|
+| `mmff94`, `uff` | 4 ms | – | no model to load |
+| `gfnff` | 0.06 s | 1.5 s | xtb optimizes internally |
+| `gfn2` | 0.33 s | – | tblite; the best value here |
+| `gfn1` | 0.57 s | – | |
+| `aimnet2` | 0.62 s | **14 s** | load dominates a single run |
+| `mace-off-small` | 2.0 s | 3.6 s | |
+| `mace-off` | 6.8 s | 0.5 s | |
+| `mace-off-24` | 7.0 s | 0.5 s | |
+| `mace-mp` | 7.8 s | 1.1 s | |
+| `mace-mh-spice` | 7.9 s | 0.5 s | |
+| `mace-mh` | 8.4 s | 0.4 s | |
+| `mace-mh-1` | 12 s | 1.5 s | |
+| `mace-polar-s` | 23 s | 0.2 s | long-range electrostatics |
+| `mace-omol` | 28 s | 5.2 s | charge-aware MACE |
+| `mace-off-large` | 31 s | 9.3 s | |
+| `mace-polar` | 57 s | 0.2 s | |
+| `mace-polar-l` | 114 s | 0.3 s | |
+
+The eSEN, UMA, and AllScAIP entries in `ligand3d models` are **estimates**, not
+measurements, because they cannot run in the same environment as MACE. The table and the
+web page dim them and say so; anything not dimmed was timed here.
+
+Two things worth noticing. `aimnet2` spends 14 seconds constructing itself and then
+minimizes in 0.6 — for one molecule that is a bad trade, and for a hundred it is
+irrelevant, since the calculator is built once and reused. And a conformer search
+multiplies the minimization column by the number of conformers, which is exactly why
+`--backend mmff94,mace-off` searches with MMFF94 and only refines the survivors: 60
+conformers through MACE-OFF would be seven minutes to rediscover what MMFF94 found in a
+quarter of a second.
+
+## Choosing a backend
+
+- **Default, and fine for most work** — `mmff94`. Four milliseconds, and geometry that is
+  perfectly reasonable for a starting structure.
+- **When the geometry matters** — `mmff94,gfn2`. Under a second, near-QM bond lengths and
+  angles, and the only tier with both a charge channel and implicit solvent.
+- **Charged or zwitterionic** — `gfn2` with solvation, which is applied automatically.
+  Avoid the neutral-trained MLFFs entirely; ligand3d refuses those pairings anyway.
+- **When you want a neural potential** — `mmff94,aimnet2` is the fastest charge-aware
+  option; `mmff94,mace-off` if the molecule is neutral and organic.
+- **Long-range electrostatics matter** — `mace-polar`, and budget a minute per molecule.
+- **Inorganic or metal-containing** — `mace-mp`, which is the only one trained for it.
+
 ## Protonation
 
 The default is **what you drew**. If you type a neutral carboxylic acid you get a

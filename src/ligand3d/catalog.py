@@ -31,6 +31,9 @@ class MethodInfo:
     solvent: str = "no"
 
     speed: str = ""
+    measured: bool = False
+    """True if `speed` was timed on this machine rather than estimated."""
+    load_seconds: float = 0.0
     memory: str = ""
     accuracy: str = ""
     training: str = ""
@@ -61,7 +64,8 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
     "mmff94": dict(
         family="classical force field",
         charge="implicit",
-        speed="~5 ms",
+        speed="4 ms",
+        measured=True,
         memory="negligible",
         accuracy="good bond lengths and angles; poor for unusual electronics",
         training="MMFF94s parameter set (Halgren), fitted to HF and experiment",
@@ -71,7 +75,8 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
     "uff": dict(
         family="classical force field",
         charge="implicit",
-        speed="~5 ms",
+        speed="4 ms",
+        measured=True,
         memory="negligible",
         accuracy="rough; use when MMFF94 has no parameters",
         training="Universal Force Field, rule-based from element and hybridization",
@@ -81,7 +86,8 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
         family="generic force field (xtb)",
         charge="explicit",
         solvent="ALPB",
-        speed="~0.1 s",
+        speed="0.06 s",
+        measured=True,
         memory="~100 MB",
         accuracy="between a classical FF and GFN2; good geometries, very fast",
         training="GFN-FF, parameterized across the periodic table",
@@ -91,7 +97,8 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
         family="semi-empirical tight binding",
         charge="explicit",
         solvent="ALPB",
-        speed="~0.8 s",
+        speed="0.57 s",
+        measured=True,
         memory="~200 MB",
         accuracy="good; superseded by GFN2 for most purposes",
         training="GFN1-xTB",
@@ -100,7 +107,8 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
         family="semi-empirical tight binding",
         charge="explicit",
         solvent="ALPB",
-        speed="~0.9 s",
+        speed="0.33 s",
+        measured=True,
         memory="~200 MB",
         accuracy="near-QM geometries; the best value here for charged species",
         training="GFN2-xTB, fitted to DFT reference data",
@@ -109,11 +117,14 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
     "aimnet2": dict(
         family="neural potential",
         charge="explicit",
-        speed="~0.5 s",
+        speed="0.62 s",
+        measured=True,
+        load_seconds=14.3,
         memory="~500 MB",
         accuracy="high for organics; the fastest charge-aware option",
         training="wB97M-D3 on a broad organic dataset",
-        notes="weights download themselves and cache in ~/.cache/aimnet.",
+        notes="weights download themselves and cache in ~/.cache/aimnet; "
+              "the first call pays ~14 s of import and model construction.",
         repo="isayevlab/aimnetcentral",
     ),
 }
@@ -181,6 +192,8 @@ def build_catalog() -> list[MethodInfo]:
             info.repo = spec.repo
             info.training = spec.training
             info.speed = spec.speed
+            info.measured = spec.measured
+            info.load_seconds = spec.load_seconds
             info.memory = spec.memory
             info.accuracy = spec.accuracy
             info.notes = spec.notes
