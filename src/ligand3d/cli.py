@@ -395,8 +395,8 @@ def _submit_to_slurm(
 ) -> None:
     """Queue the build instead of running it here."""
     from .slurm import (
-        SlurmConfig, build_payload, container_for, job_name_for, job_state, needs_gpu,
-        submit, wait_for,
+        SlurmConfig, build_payload, container_for, job_name_for, needs_gpu, submit,
+        wait_for,
     )
 
     target = target.expanduser().resolve()
@@ -433,15 +433,25 @@ def _submit_to_slurm(
 
     if not quiet:
         console.print("\n  waiting…")
-    state = wait_for(job.job_id)
-    colour = "green" if state == "COMPLETED" else "red"
+        state = wait_for(job.job_id, on_state=lambda s: console.print(f"  [dim]{s}[/dim]"))
+    else:
+        state = wait_for(job.job_id)
+
+    # A job the scheduler cannot account for still counts if it left the file
+    # behind, so the output decides rather than the state alone.
+    wrote = target.exists()
+    colour = "green" if wrote else "red"
     console.print(f"  job {job.job_id} finished: [{colour}]{state}[/{colour}]")
-    if state != "COMPLETED":
-        console.print(f"  [dim]see {job.stderr}[/dim]")
+    if not wrote:
+        console.print(f"  [dim]no output was written; see {job.stderr}[/dim]")
         raise typer.Exit(1)
-    if job_state(job.job_id) == "COMPLETED" and target.exists():
-        console.print("  [green]wrote:[/green]")
-        console.print(str(target), highlight=False, soft_wrap=True)
+    if state != "COMPLETED":
+        console.print(
+            f"  [yellow]note[/yellow] the scheduler reported {state}, "
+            "but the job left a complete result"
+        )
+    console.print("  [green]wrote:[/green]")
+    console.print(str(target), highlight=False, soft_wrap=True)
 
 
 @app.command(hidden=True)

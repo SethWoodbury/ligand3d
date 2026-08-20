@@ -172,7 +172,7 @@ class TestSubmitGuards:
         # A compute node has its own /tmp. A job whose results go there exits 0
         # and leaves nothing behind, which is the worst possible failure mode.
         payload = build_payload(from_smiles("CCO"), Settings(), Path("/tmp/out.cif"))
-        with pytest.raises(SlurmError, match="shared storage"):
+        with pytest.raises(SlurmError, match="not on storage the job can reach"):
             submit(payload, Path("/tmp/l3d-should-not-run"), dry_run=True)
 
     def test_refuses_a_walltime_the_scheduler_would_reject(self, tmp_path):
@@ -348,3 +348,164 @@ class TestWaiting:
         monkeypatch.setattr(slurm, "job_state", lambda _id: "PENDING")
         with pytest.raises(SlurmError, match="still PENDING"):
             slurm.wait_for(1, timeout=60)
+
+
+class TestSnapshotNeverDeletesSomebodysWork:
+    """`--slurm-dir` takes an arbitrary directory, and the snapshot lives at
+    `<workdir>/src`. Blindly clearing that would recursively delete the source
+    tree of any project whose directory was passed by mistake."""
+
+    def test_refuses_to_clear_a_src_that_is_not_a_snapshot(self, tmp_path):
+        from ligand3d.slurm import _snapshot_source
+
+        workdir = tmp_path / "someones-project"
+        precious = workdir / "src" / "important.py"
+        precious.parent.mkdir(parents=True)
+        precious.write_text("# a year of work\n")
+
+        with pytest.raises(SlurmError, match="Refusing to delete"):
+            _snapshot_source(Path(__file__).resolve().parents[1] / "src", workdir)
+        assert precious.read_text() == "# a year of work\n"
+
+    def test_replaces_a_previous_snapshot(self, tmp_path):
+        from ligand3d.slurm import _snapshot_source
+
+        root = Path(__file__).resolve().parents[1] / "src"
+        workdir = tmp_path / "job"
+        _snapshot_source(root, workdir)
+        stale = workdir / "src" / "ligand3d" / "gone-in-the-next-one.py"
+        stale.write_text("x")
+
+        _snapshot_source(root, workdir)
+        assert not stale.exists()
+        assert (workdir / "src" / "ligand3d" / "pipeline.py").exists()
+
+    def test_keeps_what_the_job_imports(self, tmp_path):
+        # slurm-run imports the result serializer from sketch.session, so the
+        # subpackage has to travel even though the job serves no web page.
+        from ligand3d.slurm import _snapshot_source
+
+        _snapshot_source(Path(__file__).resolve().parents[1] / "src", tmp_path / "j")
+        package = tmp_path / "j" / "src" / "ligand3d"
+        assert (package / "sketch" / "session.py").exists()
+        assert not (package / "sketch" / "static").exists()
+
+
+class TestPathsThatWouldBreakTheScript:
+    """SLURM reads `#SBATCH` paths literally — no shell, so no quoting."""
+
+    @pytest.mark.parametrize(
+        "bad", ["/home/me/my project", "/home/me/a;touch PWNED", "/home/me/x$(id)"]
+    )
+    def test_refused(self, bad, monkeypatch):
+        monkeypatch.setattr("ligand3d.slurm._is_shared", lambda p: True)
+        payload = build_payload(from_smiles("CCO"), Settings(), Path(bad) / "o.cif")
+        with pytest.raises(SlurmError, match="shell character"):
+            submit(payload, Path(bad) / "job", dry_run=True)
+
+    def test_the_shell_body_is_quoted_anyway(self):
+        # Defence in depth: the directives are screened, but anything the shell
+        # actually executes is quoted so a surprising path cannot split a command.
+        script = render_script(
+            Path("/net/j"), SlurmConfig(), Path("/net/an image.sif"),
+            Path("/net/j/src"), Path("/net/j/job.json"),
+        )
+        assert "'/net/an image.sif'" in script
+
+
+class TestSharedStorage:
+    def test_matches_path_components_not_string_prefixes(self):
+        from ligand3d.slurm import _is_shared
+
+        assert _is_shared(Path("/home/woodbuse/x")) is True
+        assert _is_shared(Path("/homeless/x")) is False
+        assert _is_shared(Path("/net2/x")) is False
+
+    def test_only_accepts_what_the_job_actually_mounts(self):
+        # /projects is shared between hosts but is not bind-mounted, so inside
+        # the container it does not exist and PYTHONPATH points at nothing.
+        from ligand3d.slurm import STANDARD_BINDS, _is_shared
+
+        assert _is_shared(Path("/projects/me/runs")) is False
+        assert set(STANDARD_BINDS) == {"/home", "/net", "/mnt"}
+
+
+class TestUnaccountedJob:
+    """squeue forgets a finished job; without accounting, sacct never knew it."""
+
+    def _no_sleeping(self, monkeypatch):
+        monkeypatch.setattr("ligand3d.slurm.time.sleep", lambda _s: None)
+
+    def test_stops_instead_of_watching_forever(self, monkeypatch):
+        from ligand3d import slurm
+
+        self._no_sleeping(monkeypatch)
+        monkeypatch.setattr(slurm, "job_state", lambda _id: "UNKNOWN")
+        assert slurm.wait_for(1) == "UNKNOWN"
+
+    def test_a_flicker_of_unknown_does_not_end_the_wait(self, monkeypatch):
+        from ligand3d import slurm
+
+        self._no_sleeping(monkeypatch)
+        states = iter(["RUNNING", "UNKNOWN", "RUNNING", "COMPLETED"])
+        monkeypatch.setattr(slurm, "job_state", lambda _id: next(states))
+        assert slurm.wait_for(1) == "COMPLETED"
+
+    def test_a_failed_query_is_not_treated_as_an_unknown_job(self, monkeypatch):
+        # Being unable to ask is not the same as the job having no record; the
+        # first is worth retrying twenty times, the second means it is over.
+        from ligand3d import slurm
+
+        self._no_sleeping(monkeypatch)
+        calls = {"n": 0}
+
+        def flaky(_id):
+            calls["n"] += 1
+            if calls["n"] <= 10:
+                raise SlurmError("squeue timed out")
+            return "COMPLETED"
+
+        monkeypatch.setattr(slurm, "job_state", flaky)
+        assert slurm.wait_for(1) == "COMPLETED"
+
+
+class TestFailedSubmissionLeavesNothingBehind:
+    def test_the_workdir_is_removed_when_sbatch_refuses(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        from ligand3d import slurm
+
+        monkeypatch.setattr(slurm, "_is_shared", lambda p: True)
+        monkeypatch.setattr(slurm, "slurm_available", lambda: True)
+        monkeypatch.setattr(slurm, "apptainer_available", lambda: True)
+        monkeypatch.setattr(
+            slurm.subprocess, "run",
+            lambda *a, **k: sp.CompletedProcess(a[0], 1, "", "Invalid partition"),
+        )
+        payload = build_payload(from_smiles("CCO"), Settings(), tmp_path / "o.cif")
+        workdir = tmp_path / "job"
+
+        with pytest.raises(SlurmError, match="Invalid partition"):
+            submit(payload, workdir, SlurmConfig(container=Path(__file__)))
+        assert not workdir.exists()
+
+    def test_a_pre_existing_workdir_is_left_alone(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        from ligand3d import slurm
+
+        monkeypatch.setattr(slurm, "_is_shared", lambda p: True)
+        monkeypatch.setattr(slurm, "slurm_available", lambda: True)
+        monkeypatch.setattr(slurm, "apptainer_available", lambda: True)
+        monkeypatch.setattr(
+            slurm.subprocess, "run",
+            lambda *a, **k: sp.CompletedProcess(a[0], 1, "", "nope"),
+        )
+        workdir = tmp_path / "job"
+        workdir.mkdir()
+        (workdir / "notes.txt").write_text("mine")
+        payload = build_payload(from_smiles("CCO"), Settings(), tmp_path / "o.cif")
+
+        with pytest.raises(SlurmError):
+            submit(payload, workdir, SlurmConfig(container=Path(__file__)))
+        assert (workdir / "notes.txt").read_text() == "mine"

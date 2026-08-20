@@ -341,7 +341,10 @@ def run_job(
             job.say("dry run: building and checking, writing no files", "warn")
             base = Path(target.directory) / target.stem
 
-        if job.slurm_options:
+        # `is not None`, not truthiness: an empty options dict means "queue
+        # this with the defaults", and running locally instead would silently
+        # do the opposite of what was asked.
+        if job.slurm_options is not None:
             _run_on_slurm(job, molecule, settings, base)
             return
 
@@ -434,11 +437,9 @@ def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
     The page stays responsive because this is already on a background thread;
     all that changes is what the thread is waiting on.
     """
-    import time
-
     from ..slurm import (
-        SlurmConfig, build_payload, container_for, job_name_for, job_state, needs_gpu,
-        submit,
+        SlurmConfig, build_payload, container_for, job_name_for, needs_gpu, submit,
+        wait_for,
     )
 
     options = job.slurm_options or {}
@@ -473,59 +474,36 @@ def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
     job.say(f"container {Path(container_for(settings.backend)).name}")
     job.say(f"log {submitted.stdout}")
 
-    last = ""
-    delay = 5.0
-    failures = 0
-    while True:
-        try:
-            state = job_state(submitted.job_id)
-        except Ligand3DError:
-            # squeue and sacct both hiccup under load. The job is almost
-            # certainly fine, so keep watching rather than declaring failure —
-            # but do not do it forever in silence.
-            failures += 1
-            if failures > 20:
-                raise
-            time.sleep(delay)
-            continue
-        failures = 0
+    def narrate(state: str) -> None:
+        job.say(f"job {submitted.job_id} is {state}")
+        if state == "PENDING":
+            job.say("waiting for a node — this can take a while when the cluster is busy")
 
-        if state != last:
-            job.say(f"job {submitted.job_id} is {state}")
-            if state == "PENDING":
-                job.say("waiting for a node — this can take a while when the cluster is busy")
-            last = state
-        if state in TERMINAL_SLURM_STATES:
-            break
-        time.sleep(delay)
-        # A job can sit in the queue for hours; back off so a long wait is not
-        # thousands of squeue calls.
-        delay = min(delay * 1.25, 60.0)
+    state = wait_for(submitted.job_id, poll_seconds=5.0, on_state=narrate)
+    result_path = workdir / "result.json"
 
-    if last != "COMPLETED":
-        tail = _tail(submitted.stderr, 12)
-        for line in tail:
+    if state != "COMPLETED" and not result_path.exists():
+        # A job the scheduler cannot account for still counts as finished if it
+        # left a result behind, so only complain when there is nothing to show.
+        for line in _tail(submitted.stderr, 12):
             job.say(line, "error")
         raise Ligand3DError(
-            f"SLURM job {submitted.job_id} ended as {last}. Full log: {submitted.stderr}"
+            f"SLURM job {submitted.job_id} ended as {state}. Full log: {submitted.stderr}"
         )
-
-    result_path = workdir / "result.json"
     if not result_path.exists():
         raise Ligand3DError(
             f"job {submitted.job_id} completed but wrote no result. See {submitted.stderr}"
+        )
+    if state != "COMPLETED":
+        job.say(
+            f"the scheduler reported {state}, but the job left a complete result",
+            "warn",
         )
     job.result = json.loads(result_path.read_text())
     job.result["slurm_job_id"] = submitted.job_id
     for path in job.result.get("outputs", []):
         job.say(str(path), "ok")
     job.state = "done"
-
-
-TERMINAL_SLURM_STATES = {
-    "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL",
-    "PREEMPTED", "BOOT_FAIL", "DEADLINE", "OUT_OF_MEMORY",
-}
 
 
 def _tail(path: Path, lines: int) -> list[str]:

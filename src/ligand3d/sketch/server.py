@@ -332,7 +332,11 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
         job = self.jobs.create()
         if settings.get("slurm"):
-            job.slurm_options = settings.get("slurm_options") or {}
+            # An empty options dict still means "queue this" — falling back to
+            # a local run because a client sent no options would quietly do the
+            # opposite of what was asked.
+            options = settings.get("slurm_options")
+            job.slurm_options = options if isinstance(options, dict) else {}
         thread = threading.Thread(
             target=run_job, args=(job, molblock, settings, info), daemon=True
         )

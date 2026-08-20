@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -229,16 +230,40 @@ def _walltime_minutes(walltime: str) -> float:
 
 
 def _is_shared(path: Path) -> bool:
-    """True if the path looks like it is on shared storage.
+    """True if the path is on storage a compute node can also see.
 
     A compute node has its own `/tmp`, so a job whose output goes there writes
     to a filesystem that vanishes when the allocation ends. This is not
     hypothetical: the first probe job for this feature ran fine, exited 0, and
     left nothing behind, because its `--output` pointed at the submit host's
     `/tmp`.
+
+    The roots are exactly the ones the job bind-mounts, because anywhere else
+    is invisible inside the container even if it is shared between hosts.
+    Compared by path component rather than string prefix, so `/homeless` is not
+    mistaken for something under `/home`.
     """
-    resolved = str(path.resolve())
-    return any(resolved.startswith(root) for root in ("/home", "/net", "/mnt", "/projects"))
+    resolved = path.resolve()
+    return any(resolved.is_relative_to(root) for root in STANDARD_BINDS)
+
+
+_SHELL_HOSTILE = re.compile(r"""[\s'"`$;&|<>()*?\[\]!\\\n]""")
+
+
+def _check_path(label: str, path: Path) -> None:
+    """Refuse a path that cannot survive the trip into an sbatch script.
+
+    `#SBATCH -o` takes the rest of the line raw — SLURM does no shell quoting
+    there — so a space in a job directory silently truncates the log path. The
+    body is quoted properly, but a path that breaks the directives cannot be
+    made to work, so it is rejected here where the message can say why.
+    """
+    if _SHELL_HOSTILE.search(str(path)):
+        raise SlurmError(
+            f"{label} {str(path)!r} contains a space or a shell character. SLURM reads "
+            "#SBATCH paths literally, so this would break the job script. Use a path "
+            "with none of: whitespace, quotes, $ ; & | < > ( ) * ? [ ] ! \\"
+        )
 
 
 def _snapshot_source(source_root: Path, workdir: Path) -> Path:
@@ -249,17 +274,32 @@ def _snapshot_source(source_root: Path, workdir: Path) -> Path:
     editing the repo could change or break a job already submitted. Copying is
     half a megabyte and makes the run reproducible: the job directory holds the
     exact code that produced its output.
+
+    `sketch/static` is left out because the job never serves a web page, but
+    `sketch` itself must come along: `slurm-run` imports the result serializer
+    from it so a queued build reports exactly what a local one does.
     """
     destination = workdir / "src"
     package = source_root / "ligand3d"
     if not package.is_dir():
         # Installed rather than checked out; import from wherever it lives.
         return source_root
-    shutil.rmtree(destination, ignore_errors=True)
+
+    if destination.exists():
+        # Only ever replace a previous snapshot. `--slurm-dir` takes an
+        # arbitrary directory, and recursively deleting a `src/` that belongs
+        # to somebody's project would be an unrecoverable way to lose work.
+        if not (destination / "ligand3d" / "__init__.py").exists():
+            raise SlurmError(
+                f"{destination} already exists and is not a ligand3d source snapshot. "
+                "Refusing to delete it — point --slurm-dir at a new or empty directory."
+            )
+        shutil.rmtree(destination)
+
     shutil.copytree(
         package,
         destination / "ligand3d",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "sketcher"),
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "static"),
     )
     return destination
 
@@ -304,6 +344,10 @@ def render_script(
     Short-flag directives, `set -euo pipefail`, and
     `OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK` follow what is already used on this
     cluster so the scripts read like their neighbours.
+
+    Everything reaching the shell body is quoted. The `#SBATCH` lines cannot be
+    — SLURM reads those literally, not through a shell — which is why paths are
+    screened by `_check_path` before they get here.
     """
     lines = [
         "#!/bin/bash",
@@ -322,7 +366,7 @@ def render_script(
     if config.account:
         lines.append(f"#SBATCH -A {config.account}")
     if config.constraint:
-        lines.append(f"#SBATCH --constraint='{config.constraint}'")
+        lines.append(f"#SBATCH --constraint={config.constraint}")
     if config.exclude:
         lines.append(f"#SBATCH --exclude={config.exclude}")
     if config.email:
@@ -330,7 +374,11 @@ def render_script(
         lines.append("#SBATCH --mail-type=END,FAIL")
     lines.extend(config.extra_sbatch)
 
-    binds = " ".join(f"--bind {b}:{b}" for b in config.binds if Path(b).exists())
+    binds = " ".join(
+        f"--bind {shlex.quote(b)}:{shlex.quote(b)}"
+        for b in config.binds
+        if Path(b).exists()
+    )
     nv = "--nv " if config.is_gpu else ""
 
     lines += [
@@ -347,18 +395,19 @@ def render_script(
         )
     lines += [
         "",
-        "# The source tree is bind-mounted and put on PYTHONPATH rather than",
-        "# installed, so the job runs exactly the code that was submitted.",
+        "# ligand3d is imported from the snapshot in this job directory rather",
+        "# than installed, so the job runs exactly the code that was submitted",
+        "# even if the working tree changed while it waited in the queue.",
         f"apptainer exec {nv}{binds} \\",
-        f"  --env PYTHONPATH={source_root} \\",
+        f"  --env PYTHONPATH={shlex.quote(str(source_root))} \\",
         # Without this the job compiles the snapshot as it imports it, leaving
         # a quarter of a megabyte of __pycache__ in what should be a record of
         # exactly what was submitted.
         "  --env PYTHONDONTWRITEBYTECODE=1 \\",
         "  --env HF_HOME=/net/databases/huggingface \\",
         "  --env TORCHDYNAMO_DISABLE=1 \\",
-        f"  {container} \\",
-        f"  python -m ligand3d.cli slurm-run {payload}",
+        f"  {shlex.quote(str(container))} \\",
+        f"  python -m ligand3d.cli slurm-run {shlex.quote(str(payload))}",
         "",
         'echo "ligand3d job finished"',
     ]
@@ -388,21 +437,28 @@ def submit(
     if problems:
         raise SlurmError("; ".join(problems))
 
-    if not _is_shared(workdir):
-        raise SlurmError(
-            f"{workdir} does not look like shared storage. A compute node has its own "
-            f"/tmp, so results written there are lost when the job ends. Choose a "
-            f"directory under /home, /net, or /mnt."
-        )
+    roots = ", ".join(STANDARD_BINDS)
+    output = Path(payload.get("output", workdir))
+    for label, path in (("job directory", workdir), ("output path", output)):
+        if not _is_shared(path):
+            raise SlurmError(
+                f"{label} {path} is not on storage the job can reach. A compute node has "
+                f"its own /tmp, so anything written there is lost when the allocation "
+                f"ends, and only {roots} are mounted inside the container. Choose a "
+                f"directory under one of those."
+            )
+        _check_path(label, path)
 
     backend = str(payload.get("settings", {}).get("backend", ""))
     container = config.container or container_for(backend)
+    _check_path("container", Path(container))
     if not dry_run and not Path(container).exists():
         raise SlurmError(
             f"container {container} does not exist. Set LIGAND3D_SIF_MACE or "
             f"LIGAND3D_SIF_FAIRCHEM, or pass one explicitly."
         )
 
+    created_workdir = not workdir.exists()
     workdir.mkdir(parents=True, exist_ok=True)
     source_root = _snapshot_source(
         Path(source_root or Path(__file__).resolve().parents[1]), workdir
@@ -430,19 +486,26 @@ def submit(
         return job
 
     try:
-        proc = subprocess.run(
-            ["sbatch", "--parsable", str(script_path)],
-            capture_output=True, text=True, timeout=120,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SlurmError(f"could not run sbatch: {exc}") from exc
-    if proc.returncode != 0:
-        raise SlurmError(f"sbatch refused the job: {(proc.stderr or proc.stdout).strip()}")
+        try:
+            proc = subprocess.run(
+                ["sbatch", "--parsable", str(script_path)],
+                capture_output=True, text=True, timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SlurmError(f"could not run sbatch: {exc}") from exc
+        if proc.returncode != 0:
+            raise SlurmError(f"sbatch refused the job: {(proc.stderr or proc.stdout).strip()}")
 
-    try:
-        job.job_id = int(proc.stdout.split(";")[0].strip())
-    except (ValueError, IndexError) as exc:
-        raise SlurmError(f"could not read a job id from sbatch: {proc.stdout!r}") from exc
+        try:
+            job.job_id = int(proc.stdout.split(";")[0].strip())
+        except (ValueError, IndexError) as exc:
+            raise SlurmError(f"could not read a job id from sbatch: {proc.stdout!r}") from exc
+    except SlurmError:
+        # Nothing was queued, so the half-megabyte snapshot and the script are
+        # just litter — and leaving them makes the next attempt pick .slurm2.
+        if created_workdir:
+            shutil.rmtree(workdir, ignore_errors=True)
+        raise
 
     (workdir / "job.meta.json").write_text(json.dumps(job.to_json(), indent=1))
     return job
@@ -474,28 +537,66 @@ def job_state(job_id: int) -> str:
     return "UNKNOWN"
 
 
-def wait_for(job_id: int, poll_seconds: float = 15.0, timeout: float | None = None) -> str:
+MAX_QUERY_FAILURES = 20
+"""Consecutive squeue/sacct errors tolerated before giving up on watching."""
+
+MAX_UNKNOWN_POLLS = 6
+"""How long to keep asking about a job neither squeue nor sacct has heard of.
+
+A job that has left the queue and has no accounting row is finished — the
+cluster just cannot say how. Without a bound this is indistinguishable from a
+job still running, and the watcher waits forever.
+"""
+
+
+def wait_for(
+    job_id: int,
+    poll_seconds: float = 15.0,
+    timeout: float | None = None,
+    on_state=None,
+) -> str:
     """Block until the job leaves the queue. Returns its final state.
+
+    `on_state` is called with each new state, for narrating a wait.
 
     Transient failures of squeue and sacct are tolerated: a scheduler too busy
     to answer is not the same as a job that died, and treating it that way
-    would abandon a run that is going fine.
+    would abandon a run that is going fine. The interval backs off, because a
+    job can sit in the queue for hours.
     """
     started = time.monotonic()
     delay = poll_seconds
     failures = 0
+    unknowns = 0
+    last = ""
+
     while True:
         try:
             state = job_state(job_id)
             failures = 0
         except SlurmError:
+            # Not being able to ask is a different thing from the job being
+            # unknown, and conflating them would turn a busy scheduler into a
+            # job that "finished" without a record. Retry without deciding.
             failures += 1
-            if failures > 20:
+            if failures > MAX_QUERY_FAILURES:
                 raise
-            state = "UNKNOWN"
+            time.sleep(delay)
+            delay = min(delay * 1.25, 60.0)
+            continue
+
+        unknowns = unknowns + 1 if state == "UNKNOWN" else 0
+
+        if state != last and on_state is not None:
+            on_state(state)
+        last = state
 
         if state in TERMINAL_STATES:
             return state
+        if unknowns >= MAX_UNKNOWN_POLLS:
+            # Out of the queue and unknown to accounting. Say so plainly rather
+            # than claiming a success or a failure that was never observed.
+            return "UNKNOWN"
         if timeout is not None and time.monotonic() - started > timeout:
             raise SlurmError(f"job {job_id} still {state} after {timeout:g}s")
         time.sleep(delay)

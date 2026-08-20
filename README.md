@@ -433,6 +433,7 @@ CPU cores the job requested:
 | gabapentin (29 atoms), 1 conformer | 4.94 s | 1.73 s | 2.9× |
 | gabapentin, 10-conformer search | 163 s | 48.9 s | 3.3× |
 | a 58-atom tripeptide, 1 conformer | 35.0 s | 7.65 s | 4.6× |
+| the tripeptide, 10-conformer search | 749 s | 156 s | 4.8× |
 
 **Single digits, not orders of magnitude.** That is the number worth internalizing before
 building a workflow around this. A 29-atom graph does not come close to filling a GPU, and
@@ -441,10 +442,11 @@ there is nothing to overlap and kernel launch latency dominates. Conformers are 
 one after another rather than batched, so a search multiplies the wall time rather than
 hiding it.
 
-The size dependence in that table is the useful part: the speedup roughly doubles between
-a 29-atom ligand and a 58-atom peptide, because a bigger graph gives the GPU more to do
-per launch. Extrapolate accordingly — small and rigid means submit locally, big and
-floppy means the queue is worth it.
+The size dependence is the useful part: the speedup climbs from 2.9× to 4.8× between a
+29-atom ligand and a 58-atom peptide, because a bigger graph gives the GPU more to do per
+launch. That last row is where it starts to matter in practice — twelve and a half minutes
+becomes two and a half. Extrapolate accordingly: small and rigid means run it locally, big
+and floppy means the queue is worth the wait.
 
 So the honest guidance is narrow:
 
@@ -482,7 +484,17 @@ scheduler also refuses jobs under five minutes, which is checked before submissi
 
 One trap is worth stating plainly, because it fails silently: **a compute node's `/tmp`
 is its own.** A job writing there exits 0 and leaves nothing behind. Output and job
-directories must be on `/home`, `/net`, or `/mnt`, and ligand3d refuses anything else.
+directories must be on `/home`, `/net`, or `/mnt` — exactly the paths the container
+bind-mounts — and ligand3d refuses anything else, including otherwise-shared filesystems
+the job would not be able to see.
+
+Two smaller refusals, both for the same reason — SLURM reads `#SBATCH` paths literally
+rather than through a shell, so it cannot be quoted around:
+
+- A job or output path containing whitespace or shell characters is rejected rather than
+  producing a script that breaks in a confusing way.
+- `--slurm-dir` pointed at a directory whose `src/` is not a previous ligand3d snapshot is
+  rejected, instead of deleting it to make room for one.
 
 Point at different images with `LIGAND3D_SIF_MACE` and `LIGAND3D_SIF_FAIRCHEM`, and at a
 different account with `LIGAND3D_SLURM_ACCOUNT`.
