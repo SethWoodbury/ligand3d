@@ -180,13 +180,26 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             self._json(summarize().to_json())
             return
 
+        # Deliberately cheap: only what the page needs to put the editor on
+        # screen. Anything that touches the filesystem belongs in /api/backends
+        # below, because the editor must never wait on a network filesystem.
         if path == "/api/config":
             self._json(
                 {
                     "engine": self.engine.name if self.engine else None,
+                    "defaults": self.defaults,
+                }
+            )
+            return
+
+        # The expensive half: probing for weights across the model store costs
+        # seconds when its attribute cache is cold. The page fetches this after
+        # the editor is already mounting and fills the menus when it arrives.
+        if path == "/api/backends":
+            self._json(
+                {
                     "backends": backend_catalog(),
                     "solvents": solvent_catalog(),
-                    "defaults": self.defaults,
                     "slurm": slurm_status(),
                 }
             )

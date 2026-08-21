@@ -281,11 +281,17 @@ def _settings(tmp_path, **overrides) -> dict:
 
 
 class TestSessionAPI:
-    def test_config_lists_backends_and_defaults(self, session):
+    def test_config_carries_the_defaults(self, session):
         base, tmp_path = session
         cfg = _get(base, "/api/config")
         assert cfg["defaults"]["directory"] == str(tmp_path)
-        assert any(b["id"] == "mmff94" for b in cfg["backends"])
+
+    def test_backends_are_served_separately_from_the_defaults(self, session):
+        """The two halves used to be one call, which made the editor wait on a
+        network filesystem. See TestTheEditorNeverWaitsOnTheFilesystem."""
+        base, _ = session
+        data = _get(base, "/api/backends")
+        assert any(b["id"] == "mmff94" for b in data["backends"])
 
     def test_serves_the_app_page_even_with_no_editor(self, session):
         """One page for every case: with no editor it shows a paste box, and the
@@ -505,3 +511,111 @@ class TestAppJavaScript:
         injected = {"pasteBox"}
         missing = referenced - defined - injected
         assert not missing, f"app.html references undefined ids: {sorted(missing)}"
+
+
+class TestTheEditorNeverWaitsOnTheFilesystem:
+    """The sketcher took six seconds to show a canvas, twice.
+
+    Both times the cause was the same shape: the page cannot mount the editor
+    until /api/config answers, and /api/config was doing work that touches the
+    model store. That store is on a network filesystem, so resolving twenty-odd
+    checkpoints costs seconds whenever its attribute cache is cold — which is
+    once per login, exactly when someone is opening the page.
+
+    A wall-clock assertion alone would not have caught it: on a warm cache the
+    same code returns in milliseconds and the test passes while the user waits.
+    So the guarantee here is structural. /api/config must not resolve weights
+    at all, and the timing test below makes weight resolution genuinely slow to
+    prove the split holds rather than trusting a fast machine.
+    """
+
+    EDITOR_BUDGET = 1.0
+
+    def test_config_does_not_resolve_weights(self, session, monkeypatch):
+        from ligand3d import config as cfg
+
+        def explode(key):
+            raise AssertionError(f"/api/config resolved weights for {key!r}")
+
+        monkeypatch.setattr(cfg, "resolve_weights", explode)
+        base, _ = session
+        payload = _get(base, "/api/config")
+        assert "defaults" in payload
+
+    def test_config_is_fast_even_when_the_model_store_is_slow(
+        self, session, monkeypatch
+    ):
+        """Simulates a cold network filesystem, which is the real failure."""
+        from ligand3d import config as cfg
+
+        real = cfg.resolve_weights
+
+        def crawl(key):
+            time.sleep(0.5)
+            return real(key)
+
+        monkeypatch.setattr(cfg, "resolve_weights", crawl)
+        base, _ = session
+
+        started = time.perf_counter()
+        _get(base, "/api/config")
+        elapsed = time.perf_counter() - started
+        assert elapsed < self.EDITOR_BUDGET, (
+            f"/api/config took {elapsed:.2f}s with a slow model store; the editor "
+            "cannot mount until this returns"
+        )
+
+    def test_config_carries_what_the_editor_needs_and_no_more(self, session):
+        """If the expensive keys come back here, something moved back in."""
+        base, _ = session
+        payload = _get(base, "/api/config")
+        assert set(payload) == {"engine", "defaults"}
+
+    def test_the_expensive_half_is_still_served(self, session):
+        base, _ = session
+        payload = _get(base, "/api/backends")
+        assert payload["backends"] and "solvents" in payload and "slurm" in payload
+
+    def test_config_is_quick_in_absolute_terms(self, session):
+        """Generous, because it shares a machine with everything else."""
+        base, _ = session
+        _get(base, "/api/config")  # warm any first-call cost
+        started = time.perf_counter()
+        for _ in range(5):
+            _get(base, "/api/config")
+        per_call = (time.perf_counter() - started) / 5
+        assert per_call < 0.25, f"/api/config averaged {per_call:.3f}s"
+
+
+class TestWeightResolutionIsCached:
+    """Resolving a checkpoint stats a network filesystem; doing it per request
+    is what made the page slow. Checkpoints do not move mid-session."""
+
+    def test_repeat_lookups_do_not_hit_the_filesystem_again(self):
+        from ligand3d import config as cfg
+
+        cfg.resolve_weights.cache_clear()
+        first = cfg.resolve_weights("mace-off")
+        info = cfg.resolve_weights.cache_info()
+        assert info.misses == 1
+
+        second = cfg.resolve_weights("mace-off")
+        assert cfg.resolve_weights.cache_info().hits >= 1
+        assert second is first
+
+    def test_the_catalog_resolves_each_model_once(self):
+        from ligand3d import config as cfg
+        from ligand3d.catalog import build_catalog
+
+        cfg.resolve_weights.cache_clear()
+        build_catalog()
+        after_first = cfg.resolve_weights.cache_info().misses
+        build_catalog()
+        assert cfg.resolve_weights.cache_info().misses == after_first
+
+    def test_the_cache_can_be_cleared_if_a_checkpoint_moves(self):
+        from ligand3d import config as cfg
+
+        cfg.resolve_weights("mace-off")
+        cfg.resolve_weights.cache_clear()
+        assert cfg.resolve_weights.cache_info().currsize == 0

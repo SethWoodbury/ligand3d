@@ -439,7 +439,12 @@
         <div class="row">
           <div>
             <label for="backend">Backend chain</label>
-            <select id="backend"></select>
+            <!-- Seeded so the page is usable the instant the editor is,
+                 rather than waiting on the method list. MMFF94 is pure RDKit
+                 and always available, so this is never a lie. -->
+            <select id="backend">
+              <option value="mmff94">mmff94 - classical, milliseconds</option>
+            </select>
           </div>
         </div>
         <div class="checks">
@@ -1640,21 +1645,35 @@ async function init() {
   catch (e) { el("engineTag").textContent = "server unreachable"; return; }
   CONFIG = cfg;
   // The editor is a GWT app that takes a second or two to boot, so its script
-  // tag goes in before anything else is awaited. Loading the scaffold menu
-  // first put that whole request in front of it and made the canvas look
-  // broken for as long as the round trip took.
+  // tag goes in before anything else is awaited. /api/config is deliberately
+  // cheap for the same reason: everything that touches the filesystem is in
+  // /api/backends, fetched below, so a cold network filesystem can delay the
+  // menus but never the canvas.
   mountEngine(cfg);
   watchResizes();
 
   el("directory").value = cfg.defaults.directory || ".";
   el("filename").value = cfg.defaults.filename || "sketch0";
   if (cfg.defaults.threads) el("threads").value = cfg.defaults.threads;
-  populateBackends(cfg);
-  populateSolvents(cfg);
-  setupSlurm(cfg.slurm);
   checkPath();
 
-  // Fills in whenever it arrives; nothing above waits on it.
+  // Both fill in whenever they arrive; nothing above waits on either.
+  fetch("/api/backends")
+    .then((r) => r.json())
+    .then((data) => {
+      // Merged first: populateBackends needs defaults.backend, which came
+      // with the cheap half.
+      Object.assign(CONFIG, data);
+      populateBackends(CONFIG);
+      populateSolvents(CONFIG);
+      setupSlurm(CONFIG.slurm);
+      slurmAdvice();
+    })
+    .catch(() => {
+      el("backendHint").textContent =
+        "could not load the method list; mmff94 still works";
+    });
+
   fetch("/api/templates")
     .then((r) => r.json())
     .then(populateTemplates)

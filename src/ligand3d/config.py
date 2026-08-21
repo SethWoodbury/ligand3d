@@ -310,8 +310,18 @@ def _env_key(key: str) -> str:
     return ENV_PREFIX + key.upper().replace("-", "_")
 
 
+@lru_cache(maxsize=None)
 def resolve_weights(key: str) -> Resolution:
-    """Locate the weights file for a logical model name."""
+    """Locate the weights file for a logical model name.
+
+    Cached because it is not cheap and it is asked repeatedly. The probe
+    directories are on a network filesystem, and resolving all twenty-odd
+    models costs seconds when the attribute cache is cold — which is once per
+    login, exactly when someone is opening the page and waiting.
+
+    Checkpoints do not move mid-session. `resolve_weights.cache_clear()` is
+    there if one ever does.
+    """
     res = Resolution(key=key)
 
     env = os.environ.get(_env_key(key))
