@@ -96,8 +96,13 @@ def _e3nn_version() -> tuple[int, ...] | None:
 _E3NN_CONFLICT = (
     "mace-torch pins e3nn==0.4.4 and fairchem-core requires e3nn>=0.5, so the two "
     "cannot share one environment. Whichever was installed last wins, and the other "
-    "fails while deserializing its checkpoint. Keep them in separate virtualenvs: "
-    "pip install 'ligand3d[mace]' in one and 'ligand3d[fairchem]' in the other."
+    "fails while deserializing its checkpoint. This is a real conflict, not a "
+    "missing install, so no amount of pip will fix it in place.\n"
+    "Three ways round it, cheapest first:\n"
+    "  ligand3d build ... --container   run in the image that has this model\n"
+    "  ligand3d build ... --slurm       the same image, on a GPU node\n"
+    "  a second virtualenv: pip install 'ligand3d[mace]' in one and "
+    "'ligand3d[fairchem]' in the other."
 )
 
 
@@ -119,9 +124,15 @@ def _check_e3nn(needs_legacy: bool) -> Availability | None:
             hint=_E3NN_CONFLICT,
         )
     if not needs_legacy and is_legacy:
+        # The way out is named in the reason, not just the hint: the reason is
+        # what shows in the methods table, and "unavailable" with no route
+        # forward reads as "this model is out of reach" when it is one flag away.
         return Availability(
             ok=False,
-            reason=f"e3nn {'.'.join(map(str, version))} is too old for fairchem-core",
+            reason=(
+                f"e3nn {'.'.join(map(str, version))} is too old for fairchem-core "
+                "— runs with --container, or --slurm for a GPU node"
+            ),
             hint=_E3NN_CONFLICT,
         )
     return None

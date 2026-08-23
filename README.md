@@ -187,7 +187,28 @@ deserializing its checkpoint with `ValueError: too many values to unpack` from i
 e3nn's codegen — which tells you nothing about the real cause. ligand3d detects the
 mismatch and says so plainly in `ligand3d doctor`.
 
-So keep two environments:
+This is a real conflict, not a missing install, so no amount of pip fixes it in place.
+There are three ways round it, and on this cluster the first is usually the right one.
+
+**1. Run in a container — `--container`.** The images used for GPU submission each carry
+one side of the split, so a model that cannot run in your virtualenv is available in one
+already on disk. No scheduler, no second install, no waiting in a queue:
+
+```bash
+ligand3d build "O=C1CN2CCC1CC2" -b esen -o quin.cif --container
+```
+
+ligand3d picks the image from the backend, runs the build inside it, and writes the files
+where you asked. It refuses a chain that mixes the families — `mace-off,esen` — because no
+single image can satisfy both.
+
+**2. Run on a GPU node — `--slurm`.** The same images, on a compute node. Worth it for a
+large molecule or a real conformer search, and not otherwise; see
+[Running on a GPU](#running-on-a-gpu-slurm-at-the-ipd). Quinuclidinone through eSEN was
+**5.6 s in a local container and 8.3 s on an A4000** — the GPU loses on a 19-atom molecule,
+which is the same size effect described there.
+
+**3. Keep two virtualenvs.** Still supported, and the right answer off this cluster:
 
 ```bash
 uv pip install -e ".[xtb,protonation,mace]"      # MACE + AIMNet2 + xTB
@@ -195,6 +216,14 @@ uv pip install -e ".[xtb,protonation,fairchem]"  # eSEN / UMA / AllScAIP + xTB
 ```
 
 Install torch from the CPU index first in both unless you have a GPU.
+
+All three produce the same answer. Quinuclidinone through eSEN gives
+`-253084.1597 kcal/mol` in a local container, on a GPU node, and from a direct
+`apptainer exec` — identical to four decimals, which is what you want from a build that
+travels between environments.
+
+`ligand3d models` names the way out in the reason itself rather than only saying
+"unavailable", because a model that is one flag away should not read as out of reach.
 
 ### MACE-POLAR — one extra package, no separate environment
 

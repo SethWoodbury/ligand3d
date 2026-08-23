@@ -216,28 +216,36 @@ class TestSubmitGuards:
 
 
 class TestNothingElseImportsIt:
-    def test_the_feature_is_optional(self):
-        """ligand3d must work with no scheduler anywhere in sight.
+    """ligand3d must work with no scheduler and no apptainer anywhere in sight."""
 
-        The module is imported lazily from exactly one place in the CLI, so a
-        machine without SLURM never loads it.
+    def test_only_the_cli_and_the_container_runner_reference_it(self):
+        """container.py reuses the payload machinery rather than copying it.
+
+        Both are reached lazily from the CLI, so the set of files allowed to
+        name this module is small and worth pinning: anything else importing it
+        would put a scheduler in the path of code that must not need one.
         """
         import subprocess
-        import sys
 
         source = Path(__file__).resolve().parents[1] / "src" / "ligand3d"
         importers = subprocess.run(
             ["grep", "-rln", r"import slurm\|from .slurm\|from ligand3d.slurm", str(source)],
             capture_output=True, text=True,
         ).stdout.split()
-        assert [Path(p).name for p in importers] == ["cli.py"]
+        assert sorted(Path(p).name for p in importers) == ["cli.py", "container.py"]
 
-        # And importing the package does not drag it in.
+    @pytest.mark.parametrize("module", ["ligand3d.slurm", "ligand3d.container"])
+    def test_importing_the_package_does_not_drag_it_in(self, module):
+        import subprocess
+        import sys
+
         check = subprocess.run(
-            [sys.executable, "-c", "import ligand3d, sys; sys.exit('ligand3d.slurm' in sys.modules)"],
+            [sys.executable, "-c",
+             f"import ligand3d, ligand3d.pipeline, sys; "
+             f"sys.exit({module!r} in sys.modules)"],
             capture_output=True, text=True,
         )
-        assert check.returncode == 0, "importing ligand3d should not import the slurm module"
+        assert check.returncode == 0, f"importing ligand3d should not import {module}"
 
 
 class TestUntrustedValues:

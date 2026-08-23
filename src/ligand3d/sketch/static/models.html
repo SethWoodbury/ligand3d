@@ -126,6 +126,31 @@
     <b>reported error</b> — what each method is aiming at, and how close it gets.
   </p>
 
+  <details class="caveat" id="splitNote" hidden>
+    <summary>Why the fairchem models say "unavailable", and how to run them anyway</summary>
+    <p>
+      <code>mace-torch</code> pins <code>e3nn==0.4.4</code> and <code>fairchem-core</code>
+      needs <code>e3nn&gt;=0.5</code>, so one virtualenv cannot hold both. That is a real
+      conflict rather than a missing install — installing the other one would simply move
+      the problem to the MACE models.
+    </p>
+    <p>
+      It is also already solved. The Apptainer images used for GPU submission each carry
+      one side of the split, so anything unavailable here runs in one that is already on
+      disk:
+    </p>
+    <p>
+      <code>ligand3d build "&lt;smiles&gt;" -b esen --container</code> &mdash; runs on this
+      machine, no scheduler, seconds.<br>
+      <code>ligand3d build "&lt;smiles&gt;" -b esen --slurm</code> &mdash; the same image on
+      a GPU node, worth it for a big molecule or a real conformer search.
+    </p>
+    <p>
+      Both give the same answer as a native install. A chain mixing the two families is
+      refused, since no single image can satisfy both.
+    </p>
+  </details>
+
   <details class="caveat">
     <summary>How to read the accuracy figures</summary>
     <p>
@@ -322,10 +347,16 @@ el("onlyCharge").addEventListener("change", render);
   }
   render();
 
+  // Shown only when something is actually blocked by the e3nn split, so the
+  // explanation appears exactly where it answers a question on the page.
+  if (DATA.methods.some((m) => !m.ready && /e3nn/.test(m.reason || ""))) {
+    el("splitNote").hidden = false;
+  }
+
   // Mentioned only where it would work, so the note never advertises a
   // scheduler this machine does not have.
   try {
-    const cfg = await (await fetch("/api/config")).json();
+    const cfg = await (await fetch("/api/backends")).json();
     if (cfg.slurm && cfg.slurm.available) el("gpuNote").hidden = false;
   } catch (e) { /* the table is the point; this is a footnote */ }
 })();

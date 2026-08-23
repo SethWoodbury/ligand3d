@@ -151,6 +151,13 @@ def build(
         "--allow-code-conflict",
         help="Generate params even if the code already exists in Rosetta.",
     ),
+    container: bool = typer.Option(
+        False,
+        "--container",
+        help="Run inside the Apptainer image that has this backend, on this "
+        "machine. This is how to use eSEN, UMA and AllScAIP, which cannot "
+        "share a virtualenv with MACE.",
+    ),
     slurm: bool = typer.Option(
         False,
         "--slurm",
@@ -231,6 +238,10 @@ def build(
         if not dry_run and suffix in ("cif", "pdb", "sdf") and suffix not in settings.formats:
             settings.formats = (suffix, *settings.formats)
 
+        if slurm and container:
+            _fail(ValueError("--container runs here and --slurm runs on a node; pick one"))
+            return
+
         if slurm:
             _submit_to_slurm(
                 mol, settings, target,
@@ -238,6 +249,10 @@ def build(
                 cpus=slurm_cpus, memory=slurm_mem, workdir=slurm_dir,
                 wait=slurm_wait, quiet=quiet,
             )
+            return
+
+        if container:
+            _run_in_container(mol, settings, target, quiet=quiet)
             return
 
         outcomes = run(mol, settings, output=target)
@@ -383,6 +398,36 @@ def _print_trace(trace: list, limit: int = 12) -> None:
                 continue
             delta = "        —" if step.delta is None else f"{step.delta:+9.4f}"
             console.print(f"      step {step.step:4d}  E {step.energy:14.5f}  dE {delta}")
+
+
+def _run_in_container(mol, settings, target: Path, quiet: bool = False) -> None:
+    """Build inside the image that has this backend, on this machine."""
+    from .container import ContainerError, image_for, run
+
+    try:
+        image = image_for(settings.backend)
+        if not quiet:
+            console.print(f"  running in [dim]{Path(image).name}[/dim]")
+        result = run(
+            mol, settings, target, image=image,
+            echo=None if quiet else (lambda line: console.print(f"  {escape(line)}")),
+        )
+    except ContainerError as exc:
+        _fail(exc)
+        return
+
+    if quiet:
+        for path in result.get("outputs", []):
+            console.print(str(path), highlight=False, soft_wrap=True)
+        return
+
+    written = result.get("outputs", [])
+    if written:
+        console.print(f"  [green]wrote {len(written)} file(s):[/green]")
+        for path in written:
+            console.print(str(path), highlight=False, soft_wrap=True)
+    else:
+        console.print("  [dim]nothing written (no output formats selected)[/dim]")
 
 
 def _job_workdir(target: Path, requested: Optional[Path]) -> Path:
