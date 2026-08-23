@@ -361,8 +361,16 @@ def _kekulized(mol: Chem.Mol) -> Chem.Mol:
     benzene as three SING and three DOUB with `pdbx_aromatic_flag Y`, not six
     SING. Writing every aromatic bond as SING says the ring is saturated, and
     anything reading bond orders rather than re-perceiving aromaticity believes
-    it. RFdiffusion4 is one such reader: its spec calls out that a bond left
-    generically aromatic is cast to single.
+    it.
+
+    Kekulizing is not a way of *discarding* aromaticity: the order and the flag
+    together are how mmCIF expresses an aromatic bond of a given order. Read
+    back through biotite, which is what RFdiffusion4 and much else use, benzene
+    written this way gives three AROMATIC_SINGLE and three AROMATIC_DOUBLE.
+    The alternatives both lose information — all-SING with the flag gives six
+    AROMATIC_SINGLE, and a generic `AROM` order gives BondType.AROMATIC, which
+    is deliberately excluded from atomworks' bond-order table because its order
+    is not well defined.
 
     `clearAromaticFlags=False` keeps `GetIsAromatic()` true, so the flag column
     still records what the orders alone cannot.

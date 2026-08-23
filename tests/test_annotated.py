@@ -284,3 +284,83 @@ class TestAgainstTheRealValidator:
         errors = re.search(r"(\d+) error\(s\)", report)
         assert errors, f"validator produced no summary:\n{report[-3000:]}"
         assert errors.group(1) == "0", report[-3000:]
+
+
+@needs_validator
+@pytest.mark.slow
+class TestAromaticBondsSurviveAsAromatic:
+    """Kekulization is not an alternative to AROMATIC_SINGLE/AROMATIC_DOUBLE —
+    it is how you express them in mmCIF.
+
+    The pair (`value_order`, `pdbx_aromatic_flag`) is the encoding: a kekulized
+    order with the flag set reads back as the aromatic bond type carrying that
+    order. This is the actual contract, and it is worth asserting on the parsed
+    types rather than on the strings we wrote, because the strings are only
+    half of it.
+
+    Measured, for benzene:
+
+        kekulized SING/DOUB + flag Y   ->  AROMATIC_SINGLE x3, AROMATIC_DOUBLE x3
+        all SING + flag Y              ->  AROMATIC_SINGLE x6   (orders lost)
+        AROM + flag Y                  ->  AROMATIC x6          (no defined order)
+
+    The last is the failure the format spec warns about: `BondType.AROMATIC` is
+    deliberately excluded from atomworks' bond-order table, because the order
+    is not well defined. So there is no useful "write generic aromatic" option
+    — every alternative to kekulizing is strictly worse.
+    """
+
+    def _bond_types(self, path: Path) -> dict[str, int]:
+        script = (
+            "import warnings; warnings.filterwarnings('ignore')\n"
+            "import json\n"
+            "from collections import Counter\n"
+            "from biotite.structure import BondType\n"
+            "import biotite.structure.io.pdbx as pdbx\n"
+            f"arr = pdbx.get_structure(pdbx.CIFFile.read({str(path)!r}), "
+            "model=1, include_bonds=True)\n"
+            "print(json.dumps(dict(Counter("
+            "BondType(int(b[2])).name for b in arr.bonds.as_array()))))\n"
+        )
+        env = {**os.environ, "PYTHONPATH": f"{RFD4}/src:{RFD4}/lib/atomworks/src",
+               "ALLOW_BIOTITE_CCD": "True"}
+        result = subprocess.run(
+            [str(RFD4 / ".venv/bin/python"), "-c", script],
+            capture_output=True, text=True, cwd=RFD4, env=env, timeout=600,
+        )
+        import json as _json
+
+        assert result.returncode == 0, result.stderr[-2000:]
+        return _json.loads(result.stdout.strip().splitlines()[-1])
+
+    def test_benzene_reads_back_as_alternating_aromatic_bonds(self, tmp_path):
+        target = write_annotated_cif(
+            tmp_path / "benzene.annotated.cif",
+            embed(from_smiles("c1ccccc1")),
+            resname="LIG",
+        )
+        types = self._bond_types(target)
+        assert types.get("AROMATIC_SINGLE") == 3, types
+        assert types.get("AROMATIC_DOUBLE") == 3, types
+        # Never the generic type, whose order atomworks does not define.
+        assert "AROMATIC" not in types, types
+
+    def test_a_fused_heteroaromatic_keeps_its_orders(self, tmp_path):
+        target = write_annotated_cif(
+            tmp_path / "indole.annotated.cif",
+            embed(from_smiles("c1ccc2[nH]ccc2c1")),
+            resname="LIG",
+        )
+        types = self._bond_types(target)
+        assert types.get("AROMATIC_DOUBLE", 0) >= 3, types
+        assert "AROMATIC" not in types, types
+
+    def test_non_aromatic_bonds_stay_plain(self, tmp_path):
+        """The flag must not be sprayed over everything: a C-H is not aromatic."""
+        target = write_annotated_cif(
+            tmp_path / "benzene.annotated.cif",
+            embed(from_smiles("c1ccccc1")),
+            resname="LIG",
+        )
+        types = self._bond_types(target)
+        assert types.get("SINGLE") == 6, types   # the six C-H bonds

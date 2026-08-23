@@ -983,6 +983,21 @@ Two format traps are handled rather than documented, because both fail silently:
   would tell the model an aromatic ring is saturated. Benzene is written as three `SING` and
   three `DOUB` with `pdbx_aromatic_flag Y`, the way the CCD does it.
 
+Kekulizing is not a way of *discarding* aromaticity, and there is no reason to want it off.
+The order and the flag together are how mmCIF expresses an aromatic bond of a given order.
+Read back through biotite — which is what RFdiffusion4 uses — the three encodings give:
+
+| what is written | what the reader gets |
+|---|---|
+| kekulized `SING`/`DOUB` + flag `Y` | `AROMATIC_SINGLE` ×3, `AROMATIC_DOUBLE` ×3 |
+| all `SING` + flag `Y` | `AROMATIC_SINGLE` ×6 — the alternation is gone |
+| generic `AROM` | `BondType.AROMATIC` ×6 — **no defined order** |
+
+So `AROMATIC_SINGLE` / `AROMATIC_DOUBLE` is very much still the target; kekulizing is how
+you hit it. The last row is the one the format spec warns about: atomworks deliberately
+omits `BondType.AROMATIC` from its bond-order table because the order is not well defined.
+Measured on benzene, not inferred, and pinned by a test.
+
 Formal charges are written as real numbers rather than `?`. Charges reach the model, and a
 neutral atom is not an atom of unknown charge.
 
