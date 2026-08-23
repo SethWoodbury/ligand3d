@@ -397,9 +397,29 @@ L-BFGS steps in every case, so the per-step cost is what actually differs.
 | `mace-polar` | 57 s | 0.2 s | |
 | `mace-polar-l` | 114 s | 0.3 s | |
 
-The eSEN, UMA, and AllScAIP entries in `ligand3d models` are **estimates**, not
-measurements, because they cannot run in the same environment as MACE. The table and the
-web page dim them and say so; anything not dimmed was timed here.
+Every entry is now measured. The fairchem models were timed inside the container that
+can run them, on the same molecule and the same machine, so they sit on the same scale as
+the rest:
+
+| backend | CPU | GPU (RTX PRO 6000) |
+|---|---|---|
+| `esen-sm-direct` | 2.8 s | 0.54 s |
+| `esen` | 7.9 s | 1.1 s |
+| `allscaip-direct` | 11 s | 1.1 s |
+| `uma-sm` | 14 s | 2.4 s |
+| `uma-s` | 15 s | 2.6 s |
+| `esen-md-direct` | 16 s | 1.5 s |
+| `allscaip` | 23 s | 2.5 s |
+| `uma-s-1p2` | 36 s | 3.4 s |
+| `uma-m` | 63 s | 14 s |
+
+The old estimates were badly wrong in both directions — `uma-m` was guessed at "minutes"
+and takes 63 s on CPU, while `uma-s` was guessed at 12 s and takes 15 s. All nine agree
+on the energy to within 0.1 kcal/mol, which is the cross-check that says the numbers came
+from the same calculation.
+
+`uma-m` carries one caveat the table cannot: **11 GB of weights needs real memory.** It was
+OOM-killed on a 31 GB workstation and ran without trouble on a node with 96 GB.
 
 Two things worth noticing. `aimnet2` spends 14 seconds constructing itself and then
 minimizes in 0.6 — for one molecule that is a bad trade, and for a hundred it is
@@ -916,6 +936,55 @@ zwitterion reads back as `[NH3+]CC1(CC(=O)[O-])CCCCC1` with both sites intact.
 
 PDB output has unique atom names, CONECT records, formal charges, and provenance REMARKs.
 Every file written is read back and checked before the command returns.
+
+## Annotated CIF for RFdiffusion4-Proteina
+
+```bash
+ligand3d build "<smiles>" -o lig.cif --annotated --rfd-length 100-155
+```
+
+Writes `lig.annotated.cif` beside the ordinary one, or tick **annotated CIF
+(RFdiffusion4)** in the sketcher. It is the model's native input format: an ordinary
+mmCIF with extra `_atom_site` columns saying what to hold fixed.
+
+The mental model that prevents most mistakes:
+
+> **`mask = True` means CONDITIONED. There is no "diffuse this" flag. Diffusion is the
+> absence of conditioning.**
+
+So the file says *here is the ligand, in this pose, with this identity* — and leaves
+everything else to be generated. What ligand3d contributes is the pose, which is exactly
+the thing a binder- or enzyme-design run needs given rather than invented.
+
+| what it writes | why |
+|---|---|
+| `mask_coordinate_1_atom = True` | pins the conformer ligand3d built. `--rfd-free-pose` turns this off and lets the model choose the geometry |
+| `mask_sequence_1_residue = True` | **not optional.** A non-polymer is *atomized*, and an atomized token that is not sequence-conditioned is rejected — ligands are context, never generated |
+| `condition_sequence_1_residue` | the residue name |
+| an expandable-segment sentinel | one fake atom whose residue name is `100-155`, standing for the protein to build. Collapsed, not realized, so the model samples a length per replicate |
+
+Coordinate conditioning on any non-backbone atom *requires* sequence conditioning, because
+the atom37 slot occupancy fingerprints the residue anyway. Every ligand atom is
+non-backbone, so both rules point the same way and the combination the validator rejects is
+not expressible here.
+
+Omit `--rfd-length` to condition on the ligand alone and supply the contig yourself.
+
+**Verified against the real thing.** Every file is checked with RFD4's own
+`check_annotated_cif.py`, which runs the actual inference pipeline — a pass means the model
+will accept it. Charged, aromatic, heteroaromatic, zwitterionic and bare-ligand cases all
+report **0 errors**, matching the reference files shipped with the format spec.
+
+Two format traps are handled rather than documented, because both fail silently:
+
+- **Masks are the literal strings `True`/`False`.** Dtype inference tries int before bool,
+  so `1`/`0` becomes an int64 array and fails much later with "Mask must be a boolean array".
+- **Bond orders are Kekulé.** A bond left generically aromatic is cast to single, which
+  would tell the model an aromatic ring is saturated. Benzene is written as three `SING` and
+  three `DOUB` with `pdbx_aromatic_flag Y`, the way the CCD does it.
+
+Formal charges are written as real numbers rather than `?`. Charges reach the model, and a
+neutral atom is not an atom of unknown charge.
 
 ## Rosetta params
 

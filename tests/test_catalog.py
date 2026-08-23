@@ -263,8 +263,22 @@ class TestTimingHonesty:
     def test_the_catalog_carries_the_flag(self):
         by_id = {m.id: m for m in build_catalog()}
         assert by_id["mace-off"].measured
-        assert not by_id["esen"].measured
         assert by_id["mmff94"].measured
+
+    def test_every_model_is_measured_now(self):
+        """The fairchem models used to be the exception, timed only by guess
+        because they cannot run in this virtualenv. They can be timed in the
+        container that runs them, and were: nothing in the table is a guess.
+
+        If a new model is added, this fails until it has been run — which is
+        the point. An estimate that reads like a measurement is worse than a
+        blank.
+        """
+        unmeasured = [spec.key for spec in MODELS if not spec.measured]
+        assert unmeasured == [], (
+            f"{unmeasured} have estimated speeds. Time them with "
+            f"--container, or mark the speed as an estimate."
+        )
 
     def test_slow_loading_models_record_it(self):
         """aimnet2 spends 14 s constructing itself and 0.6 s minimizing."""

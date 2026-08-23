@@ -103,6 +103,21 @@ class Settings:
     params: bool = False
     """Also generate a Rosetta params file."""
 
+    rfd_design_length: str | None = None
+    """Length of the protein RFdiffusion4 should build around the ligand.
+
+    `120`, or a range like `100-155` which is resampled per replicate. None
+    writes the ligand alone, for pairing with a contig or condition spec that
+    says what to build.
+    """
+    rfd_fix_coordinates: bool = True
+    """Pin the ligand's pose in the annotated CIF.
+
+    On, because a pose is the thing ligand3d exists to produce. Off hands the
+    model the ligand's identity and lets it choose the geometry, which is right
+    when the conformer is a guess rather than a measurement.
+    """
+
     def effective_sample(self, molecule) -> int:
         """How many conformers to generate for the search.
 
@@ -141,6 +156,7 @@ class Outcome:
     cif_path: Path | None = None
     pdb_path: Path | None = None
     sdf_path: Path | None = None
+    annotated_path: Path | None = None
     trajectory_path: Path | None = None
     params_result: object | None = None
     notes: list[str] = field(default_factory=list)
@@ -160,7 +176,8 @@ class Outcome:
 
     def written(self) -> list[Path]:
         paths = [
-            p for p in (self.cif_path, self.pdb_path, self.sdf_path, self.trajectory_path)
+            p for p in (self.cif_path, self.pdb_path, self.sdf_path,
+                        self.annotated_path, self.trajectory_path)
             if p is not None
         ]
         if self.params_result is not None:
@@ -511,6 +528,33 @@ def _write_outputs(
             outcome.mol_3d,
             records=outcome.records,
             name=resname,
+        )
+
+    if "annotated" in formats:
+        from .annotated import parse_segment, write_annotated_cif
+
+        # One pose per file: the annotation says "use exactly this geometry",
+        # and several models in one file would silently condition on the first.
+        single = Chem.Mol(outcome.mol_3d)
+        # Copy before removing: GetConformer returns a reference into the
+        # molecule, so RemoveAllConformers frees it and using it afterwards is
+        # a use-after-free that surfaces as MemoryError.
+        keep = Chem.Conformer(single.GetConformer(outcome.records[0].conf_id))
+        single.RemoveAllConformers()
+        single.AddConformer(keep, assignId=True)
+
+        outcome.annotated_path = write_annotated_cif(
+            base.with_name(f"{base.stem}.annotated.cif"),
+            single,
+            records=outcome.records[:1],
+            resname=resname,
+            smiles=variant.smiles,
+            fix_coordinates=settings.rfd_fix_coordinates,
+            design=(
+                parse_segment(settings.rfd_design_length)
+                if settings.rfd_design_length
+                else None
+            ),
         )
 
     if settings.trajectory and outcome.frames:

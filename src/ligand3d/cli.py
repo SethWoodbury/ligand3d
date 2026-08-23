@@ -119,8 +119,9 @@ def build(
         "cif,sdf",
         "--format",
         "-f",
-        help="Comma-separated outputs: cif, pdb, sdf. mmCIF is the default because "
-        "it carries the bond orders PDB cannot.",
+        help="Comma-separated outputs: cif, pdb, sdf, annotated. mmCIF is the "
+        "default because it carries the bond orders PDB cannot; 'annotated' adds "
+        "an RFdiffusion4 annotated CIF alongside it.",
     ),
     no_sdf: bool = typer.Option(False, "--no-sdf", help="Do not write the .sdf sidecar."),
     dry_run: bool = typer.Option(
@@ -140,6 +141,24 @@ def build(
     ),
     make_params: bool = typer.Option(
         False, "--params", help="Also generate a Rosetta params file."
+    ),
+    annotated: bool = typer.Option(
+        False,
+        "--annotated",
+        help="Also write an annotated mmCIF for RFdiffusion4-Proteina, with the "
+        "ligand's pose and identity given to the model as context.",
+    ),
+    rfd_length: Optional[str] = typer.Option(
+        None,
+        "--rfd-length",
+        help="Protein length RFdiffusion4 should build around the ligand: 120, "
+        "or a range like 100-155 resampled per replicate.",
+    ),
+    rfd_free_pose: bool = typer.Option(
+        False,
+        "--rfd-free-pose",
+        help="Let the model choose the ligand's pose instead of pinning the one "
+        "ligand3d built. Its identity is still given.",
     ),
     params_code: Optional[str] = typer.Option(
         None,
@@ -200,6 +219,8 @@ def build(
         _fail(ValueError("--enumerate-states needs a pH; add --ph <value> or --protonate"))
 
     chosen = () if dry_run else _parse_formats(formats, want_sdf=not no_sdf)
+    if annotated and not dry_run and "annotated" not in chosen:
+        chosen = (*chosen, "annotated")
 
     settings = Settings(
         backend=backend,
@@ -224,6 +245,8 @@ def build(
         trace=not no_trace,
         trajectory=trajectory,
         params=make_params,
+        rfd_design_length=rfd_length,
+        rfd_fix_coordinates=not rfd_free_pose,
         params_code=params_code,
         allow_code_conflict=allow_code_conflict,
     )
@@ -345,7 +368,7 @@ def _print_stereo(mol) -> None:
 
 def _parse_formats(spec: str, want_sdf: bool = True) -> tuple[str, ...]:
     """Validate and normalize a --format list."""
-    known = ("cif", "pdb", "sdf")
+    known = ("cif", "pdb", "sdf", "annotated")
     chosen = [f.strip().lower() for f in spec.split(",") if f.strip()]
     chosen = ["cif" if f == "mmcif" else f for f in chosen]
     bad = [f for f in chosen if f not in known]

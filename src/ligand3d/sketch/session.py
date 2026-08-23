@@ -61,7 +61,14 @@ class TargetInfo:
         }
 
 
-VALID_FORMATS = ("cif", "pdb", "sdf")
+VALID_FORMATS = ("cif", "pdb", "sdf", "annotated")
+
+#: File suffix per format. The annotated CIF keeps `.cif` so anything that
+#: reads mmCIF still opens it — it *is* an mmCIF — while the double extension
+#: says at a glance which of the two files carries the conditioning.
+FORMAT_SUFFIX = {
+    "cif": "cif", "pdb": "pdb", "sdf": "sdf", "annotated": "annotated.cif",
+}
 
 
 def normalize_formats(formats, default=("cif", "sdf")) -> tuple[str, ...]:
@@ -88,7 +95,12 @@ def _normalize_stem(filename: str) -> str:
     produce "lig.cif.cif".
     """
     name = Path(str(filename).strip()).name
-    stem = Path(name).stem if Path(name).suffix.lower().lstrip(".") in VALID_FORMATS else name
+    # ".annotated.cif" is two suffixes, so strip that pair before the single ones.
+    for suffix in sorted(FORMAT_SUFFIX.values(), key=len, reverse=True):
+        if name.lower().endswith("." + suffix):
+            name = name[: -(len(suffix) + 1)]
+            break
+    stem = name
     stem = stem.strip() or "sketch0"
     return stem
 
@@ -110,7 +122,7 @@ def inspect_target(directory: str, filename: str, formats=None) -> TargetInfo:
             error=f"cannot resolve that path: {exc}",
         )
 
-    targets = [base / f"{stem}.{fmt}" for fmt in chosen]
+    targets = [base / f"{stem}.{FORMAT_SUFFIX[fmt]}" for fmt in chosen]
     exists = base.is_dir()
 
     # Walk up to the nearest existing ancestor to judge whether the directory
@@ -152,7 +164,8 @@ def next_filename(directory: str, stem: str = "sketch") -> str:
 
     used: set[int] = set()
     pattern = re.compile(
-        rf"^{re.escape(stem)}(\d+)\.(?:{'|'.join(VALID_FORMATS)})$", re.IGNORECASE
+        rf"^{re.escape(stem)}(\d+)\.(?:{'|'.join(re.escape(s) for s in FORMAT_SUFFIX.values())})$",
+        re.IGNORECASE,
     )
     for entry in base.iterdir():
         match = pattern.match(entry.name)
@@ -619,6 +632,9 @@ def _settings_from_json(data: dict[str, Any]):
         trace=bool(data.get("trace", True)),
         trajectory=bool(data.get("trajectory")),
         params=bool(data.get("params")),
+        rfd_design_length=(str(data.get("rfd_design_length")).strip() or None)
+        if data.get("rfd_design_length") else None,
+        rfd_fix_coordinates=bool(data.get("rfd_fix_coordinates", True)),
         params_code=(data.get("params_code") or None),
         allow_code_conflict=bool(data.get("allow_code_conflict")),
     )

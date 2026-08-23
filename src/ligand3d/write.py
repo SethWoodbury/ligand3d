@@ -279,7 +279,10 @@ _CIF_BOND_ORDER = {
     Chem.BondType.DOUBLE: "DOUB",
     Chem.BondType.TRIPLE: "TRIP",
     Chem.BondType.QUADRUPLE: "QUAD",
-    Chem.BondType.AROMATIC: "SING",  # value_order with aromatic_flag Y
+    # Only reached if kekulization failed; see _kekulized(). A lone aromatic
+    # bond has no CCD value_order, and SING with the aromatic flag set is what
+    # the dictionary itself falls back to.
+    Chem.BondType.AROMATIC: "SING",
 }
 
 
@@ -351,6 +354,29 @@ def _number_entities(structure) -> None:
         entity.name = str(number)
 
 
+def _kekulized(mol: Chem.Mol) -> Chem.Mol:
+    """A copy whose aromatic bonds carry alternating single/double orders.
+
+    `value_order` in `_chem_comp_bond` is a Kekulé order — the CCD writes
+    benzene as three SING and three DOUB with `pdbx_aromatic_flag Y`, not six
+    SING. Writing every aromatic bond as SING says the ring is saturated, and
+    anything reading bond orders rather than re-perceiving aromaticity believes
+    it. RFdiffusion4 is one such reader: its spec calls out that a bond left
+    generically aromatic is cast to single.
+
+    `clearAromaticFlags=False` keeps `GetIsAromatic()` true, so the flag column
+    still records what the orders alone cannot.
+    """
+    work = Chem.Mol(mol)
+    try:
+        Chem.Kekulize(work, clearAromaticFlags=False)
+    except Exception:
+        # A structure RDKit cannot kekulize keeps aromatic bond types, and the
+        # SING + flag Y fallback above applies.
+        return mol
+    return work
+
+
 def _add_bond_loop(block, mol: Chem.Mol, resname: str) -> None:
     """Append `_chem_comp_bond`, the bond orders PDB cannot represent."""
     comp = (resname or "LIG").upper()[:_MAX_RESNAME]
@@ -365,7 +391,7 @@ def _add_bond_loop(block, mol: Chem.Mol, resname: str) -> None:
         "_chem_comp_bond.",
         ["comp_id", "atom_id_1", "atom_id_2", "value_order", "pdbx_aromatic_flag"],
     )
-    for bond in mol.GetBonds():
+    for bond in _kekulized(mol).GetBonds():
         order = _CIF_BOND_ORDER.get(bond.GetBondType(), "SING")
         aromatic = "Y" if bond.GetIsAromatic() else "N"
         loop.add_row(

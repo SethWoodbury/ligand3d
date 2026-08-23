@@ -418,8 +418,36 @@
           <label><input type="checkbox" id="fmt_cif" checked> mmCIF</label>
           <label><input type="checkbox" id="fmt_sdf" checked> SDF</label>
           <label><input type="checkbox" id="fmt_pdb"> PDB</label>
+          <label title="an mmCIF carrying RFdiffusion4 conditioning columns">
+            <input type="checkbox" id="fmt_annotated"> annotated CIF (RFdiffusion4)
+          </label>
         </div>
         <div class="note" id="formatNote"></div>
+
+        <div id="rfdBox" hidden>
+          <div class="row split">
+            <div>
+              <label for="rfd_length">Design length</label>
+              <input type="text" id="rfd_length" value="100-155" spellcheck="false"
+                     placeholder="120, or a range like 100-155">
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <div class="checks" style="margin:.35rem 0 0">
+                <label title="off hands the model the ligand's identity but lets it choose the geometry">
+                  <input type="checkbox" id="rfd_fix_pose" checked> pin the pose
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="note">
+            Writes <code>&lt;name&gt;.annotated.cif</code>: the ligand as context for
+            RFdiffusion4-Proteina, plus a collapsed segment for the protein to build around
+            it. <b>mask = conditioned</b> — the columns say what to hold fixed, and diffusion
+            is the absence of conditioning. Leave the length empty to condition on the ligand
+            alone and supply the contig yourself.
+          </div>
+        </div>
         <div class="checks">
           <label><input type="checkbox" id="autoname" checked> auto-increment the name after each build</label>
         </div>
@@ -1176,6 +1204,7 @@ function chosenFormats() {
   if (el("fmt_cif").checked) out.push("cif");
   if (el("fmt_sdf").checked) out.push("sdf");
   if (el("fmt_pdb").checked) out.push("pdb");
+  if (el("fmt_annotated").checked) out.push("annotated");
   return out;
 }
 
@@ -1270,6 +1299,8 @@ function collectSettings() {
     directory: el("directory").value,
     filename: el("filename").value,
     formats: chosenFormats(),
+    rfd_design_length: el("rfd_length").value.trim() || null,
+    rfd_fix_coordinates: el("rfd_fix_pose").checked,
     resname: el("resname").value.trim() || null,
     backend: chainValue(),
     solvent: solvent === "none" ? "" : solvent,
@@ -1763,10 +1794,12 @@ el("protonation").addEventListener("change", (e) => {
 });
 el("directory").addEventListener("input", schedulePathCheck);
 el("filename").addEventListener("input", schedulePathCheck);
-["fmt_cif", "fmt_sdf", "fmt_pdb"].forEach((id) =>
+["fmt_cif", "fmt_sdf", "fmt_pdb", "fmt_annotated"].forEach((id) =>
   el(id).addEventListener("change", () => { checkPath(); updateFormatNote(); }));
 
 function updateFormatNote() {
+  // The RFdiffusion4 options only mean anything when that format is selected.
+  el("rfdBox").hidden = !el("fmt_annotated").checked;
   const n = chosenFormats().length;
   el("formatNote").textContent = n
     ? ""
