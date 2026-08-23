@@ -196,11 +196,18 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         # seconds when its attribute cache is cold. The page fetches this after
         # the editor is already mounting and fills the menus when it arrives.
         if path == "/api/backends":
+            from ..container import available as container_available
+            from ..container import image_status
+
             self._json(
                 {
                     "backends": backend_catalog(),
                     "solvents": solvent_catalog(),
                     "slurm": slurm_status(),
+                    "container": {
+                        "available": container_available(),
+                        "images": image_status(),
+                    },
                 }
             )
             return
@@ -409,12 +416,15 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         job = self.jobs.create()
-        if settings.get("slurm"):
+        where = str(settings.get("where") or ("slurm" if settings.get("slurm") else "local"))
+        if where == "slurm":
             # An empty options dict still means "queue this" — falling back to
             # a local run because a client sent no options would quietly do the
             # opposite of what was asked.
             options = settings.get("slurm_options")
             job.slurm_options = options if isinstance(options, dict) else {}
+        elif where == "container":
+            job.in_container = True
         thread = threading.Thread(
             target=run_job, args=(job, molblock, settings, info), daemon=True
         )

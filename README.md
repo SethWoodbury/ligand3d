@@ -202,6 +202,12 @@ ligand3d picks the image from the backend, runs the build inside it, and writes 
 where you asked. It refuses a chain that mixes the families — `mace-off,esen` — because no
 single image can satisfy both.
 
+The sketcher has the same thing: a **Run** control with *on this machine*, *in a container*,
+and *on a GPU node*. Choosing a container un-greys the fairchem models in the method menu,
+which otherwise sit disabled — the checkbox would be useless without that, since the thing
+it enables would still not be selectable. Picking one while still set to run locally says
+so, rather than letting you press Build and read about e3nn afterwards.
+
 **2. Run on a GPU node — `--slurm`.** The same images, on a compute node. Worth it for a
 large molecule or a real conformer search, and not otherwise; see
 [Running on a GPU](#running-on-a-gpu-slurm-at-the-ipd). Quinuclidinone through eSEN was

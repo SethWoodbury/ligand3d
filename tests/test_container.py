@@ -140,3 +140,57 @@ class TestForReal:
         )
         assert (tmp_path / "quin.cif").exists()
         assert result["formula"] == "C7H11NO"
+
+
+class TestTheMenuKnowsWhatAContainerCouldRun:
+    """The method menu greys out what cannot run. Without a per-backend flag the
+    models the container exists for would stay greyed out, so the checkbox would
+    be there and the thing it enables would not be selectable."""
+
+    def test_checkpointed_models_are_flagged(self):
+        from ligand3d.container import runnable_in_container
+
+        ids = ["esen", "uma-s", "mace-off", "mace-polar", "aimnet2"]
+        flagged = runnable_in_container(ids)
+        if not available():
+            assert flagged == set()
+            return
+        from ligand3d.container import image_status
+
+        present = image_status()
+        if present["fairchem"]:
+            assert {"esen", "uma-s"} <= flagged
+        if present["mace"]:
+            assert {"mace-off", "mace-polar"} <= flagged
+
+    def test_methods_needing_no_image_are_not_flagged(self):
+        from ligand3d.container import runnable_in_container
+
+        assert runnable_in_container(["mmff94", "uff", "gfn2", "gfnff"]) == set()
+
+    def test_nothing_is_flagged_without_apptainer(self, monkeypatch):
+        from ligand3d.container import runnable_in_container
+
+        monkeypatch.setattr("ligand3d.container.apptainer_available", lambda: False)
+        assert runnable_in_container(["esen", "mace-off"]) == set()
+
+    def test_family_routing(self):
+        from ligand3d.container import family_of
+
+        assert family_of("esen") == "fairchem"
+        assert family_of("uma-m") == "fairchem"
+        assert family_of("mace-off") == "mace"
+        assert family_of("mace-polar") == "mace"
+        assert family_of("mmff94") is None
+
+    def test_the_catalog_carries_the_flag(self):
+        from ligand3d.sketch.session import backend_catalog
+
+        catalog = {b["id"]: b for b in backend_catalog()}
+        assert "in_container" in catalog["esen"]
+        assert catalog["mmff94"]["in_container"] is False
+
+    def test_image_status_is_a_single_answer_for_both_families(self):
+        from ligand3d.container import image_status
+
+        assert set(image_status()) == {"mace", "fairchem"}

@@ -491,12 +491,20 @@
           written as <code>&lt;name&gt;_traj.pdb</code>, one MODEL per step.
         </div>
 
+        <!-- One control rather than two checkboxes: these are three places to
+             run the same build, and picking two of them is not a thing. -->
         <div id="slurmBox" hidden>
-          <div class="checks">
-            <label>
-              <input type="checkbox" id="slurm">
-              run this on a GPU node (SLURM)
-            </label>
+          <div class="row split">
+            <div>
+              <label for="runWhere">Run</label>
+              <select id="runWhere">
+                <option value="local">on this machine</option>
+              </select>
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <div class="note" id="whereTag" style="margin:.35rem 0 0"></div>
+            </div>
           </div>
           <div class="row three" id="slurmOpts" hidden>
             <div>
@@ -1282,7 +1290,7 @@ function collectSettings() {
     params_code: el("params_code").value.trim() || null,
     allow_code_conflict: el("allow_code_conflict").checked,
     threads: Number(el("threads").value) || 1,
-    slurm: el("slurm").checked,
+    where: whereValue(),
     slurm_options: {
       partition: el("slurm_partition").value,
       gpu_class: el("slurm_gpu").value,
@@ -1291,34 +1299,81 @@ function collectSettings() {
   };
 }
 
-/* SLURM is an IPD convenience. Where there is no scheduler the whole block
-   stays hidden rather than offering a checkbox that could only fail. */
+/* Where a build runs. Three options, each hidden unless it would work here, so
+   nothing is offered that could only fail. */
+function whereValue() {
+  const select = el("runWhere");
+  return select ? select.value : "local";
+}
+
 function setupSlurm(status) {
-  if (!status || !status.available) return;
+  const slurmOk = !!(status && status.available);
+  const containerOk = !!(CONFIG && CONFIG.container && CONFIG.container.available);
+  if (!slurmOk && !containerOk) return;
+
+  const options = ['<option value="local">on this machine</option>'];
+  if (containerOk) {
+    options.push('<option value="container">in a container (here)</option>');
+  }
+  if (slurmOk) {
+    options.push('<option value="slurm">on a GPU node (SLURM)</option>');
+  }
+  el("runWhere").innerHTML = options.join("");
   el("slurmBox").hidden = false;
-  el("slurm").addEventListener("change", () => {
-    el("slurmOpts").hidden = !el("slurm").checked;
+
+  el("runWhere").addEventListener("change", () => {
+    el("slurmOpts").hidden = whereValue() !== "slurm";
+    populateBackends(CONFIG);   // greying depends on where it will run
     slurmAdvice();
   });
   el("backend").addEventListener("change", slurmAdvice);
+  slurmAdvice();
 }
 
-/* Queueing a force field costs far more in wait than it saves in compute. */
+/* Says what the current choice means for the current method, which is the only
+   place the two interact: a force field gains nothing from a queue, and the
+   fairchem models cannot run here at all. */
 function slurmAdvice() {
-  if (!CONFIG || !CONFIG.slurm || !CONFIG.slurm.available) return;
-  const chain = chainValue().split(",").map((s) => s.trim());
-  const kinds = new Map((CONFIG.backends || []).map((b) => [b.id, b.kind]));
-  const anyMlff = chain.some((name) => kinds.get(name) === "mlff");
   const note = el("slurmNote");
-  if (el("slurm").checked && !anyMlff) {
-    note.innerHTML = "<b>Nothing here needs a GPU.</b> " +
-      chainValue() + " runs in well under a second on this machine, so waiting " +
-      "in the queue is slower than just building it. Uncheck this.";
+  const tag = el("whereTag");
+  if (!note || !CONFIG) return;
+  const where = whereValue();
+  const chain = chainValue().split(",").map((s) => s.trim());
+  const byId = new Map((CONFIG.backends || []).map((b) => [b.id, b]));
+  const anyMlff = chain.some((n) => (byId.get(n) || {}).kind === "mlff");
+  const needsContainer = chain.filter(
+    (n) => byId.get(n) && !byId.get(n).ready && byId.get(n).in_container);
+
+  note.style.color = "";
+  if (tag) tag.textContent = "";
+
+  if (needsContainer.length && where === "local") {
+    note.innerHTML = "<b>" + esc(needsContainer.join(", ")) + " cannot run here.</b> " +
+      "It needs a different e3nn than MACE does, so no single environment holds both. " +
+      "Choose <b>in a container</b> — same machine, same answer, no queue.";
     note.style.color = "var(--warn)";
-  } else {
-    note.innerHTML = SLURM_NOTE;
-    note.style.color = "";
+    return;
   }
+  if (where === "container") {
+    if (tag) tag.textContent = "no scheduler, no queue";
+    note.innerHTML = "Runs in the Apptainer image that carries this method, on this " +
+      "machine. This is how eSEN, UMA and AllScAIP are reachable at all. A chain " +
+      "mixing MACE and fairchem is refused, because no one image has both.";
+    return;
+  }
+  if (where === "slurm") {
+    if (tag) tag.textContent = "queued";
+    if (!anyMlff) {
+      note.innerHTML = "<b>Nothing here needs a GPU.</b> " + esc(chainValue()) +
+        " runs in well under a second on this machine, so waiting in the queue is " +
+        "slower than just building it.";
+      note.style.color = "var(--warn)";
+      return;
+    }
+    note.innerHTML = SLURM_NOTE;
+    return;
+  }
+  note.innerHTML = SLURM_NOTE;
 }
 const SLURM_NOTE = document.getElementById("slurmNote").innerHTML;
 
@@ -1563,17 +1618,24 @@ function describeBackend(spec) {
 }
 
 function populateBackends(cfg) {
-  backends = cfg.backends;
+  backends = cfg.backends || [];
   const select = el("backend");
+  const previous = select.value;
+  // Running in a container brings the fairchem models within reach, so what
+  // counts as usable depends on where the build is headed.
+  const inContainer = whereValue() === "container";
+  const usable = (b) => b.ready || (inContainer && b.in_container);
+
   const options = [
     '<option value="mmff94">mmff94 - classical, milliseconds</option>',
     '<option value="uff">uff - classical, broad elements</option>',
   ];
   const groups = { semiempirical: [], mlff: [], ff: [] };
-  backends.filter((b) => b.ready).forEach((b) => {
+  backends.filter(usable).forEach((b) => {
     if (b.id === "mmff94" || b.id === "uff") return;
+    const via = !b.ready ? " (in a container)" : "";
     (groups[b.kind] || groups.ff).push(
-      '<option value="mmff94,' + b.id + '">mmff94 -&gt; ' + b.id + "</option>");
+      '<option value="mmff94,' + b.id + '">mmff94 -&gt; ' + b.id + via + "</option>");
   });
   if (groups.semiempirical.length)
     options.push('<optgroup label="semi-empirical">' + groups.semiempirical.join("") + "</optgroup>");
@@ -1581,21 +1643,25 @@ function populateBackends(cfg) {
     options.push('<optgroup label="machine-learned">' + groups.mlff.join("") + "</optgroup>");
   if (groups.ff.length)
     options.push('<optgroup label="other force fields">' + groups.ff.join("") + "</optgroup>");
-  const missing = backends.filter((b) => !b.ready);
+  const missing = backends.filter((b) => !usable(b));
   if (missing.length)
     options.push('<optgroup label="not available here">' + missing.map((b) =>
       '<option value="mmff94,' + b.id + '" disabled>' + b.id + " - " + b.reason +
       "</option>").join("") + "</optgroup>");
   select.innerHTML = options.join("");
-  select.value = cfg.defaults.backend || "mmff94";
+  // Keep the current choice across a repopulate, so switching to "in a
+  // container" does not silently reset a method that is now selectable.
+  select.value = previous || cfg.defaults.backend || "mmff94";
+  if (!select.value) select.value = cfg.defaults.backend || "mmff94";
   if (!select.value) select.value = "mmff94";
   el("backendHint").textContent = describeBackend(select.value);
 
-  // the custom-chain picker lists every single method, ready ones first
+  // the custom-chain picker lists every single method, usable ones first
   const pick = el("chainPick");
-  const ready = backends.filter((b) => b.ready).map((b) =>
-    '<option value="' + b.id + '">' + b.id + " (" + b.kind + ")</option>");
-  const notReady = backends.filter((b) => !b.ready).map((b) =>
+  const ready = backends.filter(usable).map((b) =>
+    '<option value="' + b.id + '">' + b.id + " (" + b.kind +
+    (b.ready ? "" : ", in a container") + ")</option>");
+  const notReady = backends.filter((b) => !usable(b)).map((b) =>
     '<option value="' + b.id + '" disabled>' + b.id + " — " + b.reason + "</option>");
   pick.innerHTML = '<optgroup label="available here">' + ready.join("") + "</optgroup>" +
     (notReady.length ? '<optgroup label="not available">' + notReady.join("") + "</optgroup>" : "");

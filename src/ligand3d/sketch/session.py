@@ -176,6 +176,8 @@ class Job:
     slurm_options: dict[str, Any] | None = None
     """Set when the page asked for the build to run on a compute node."""
     slurm_job_id: int | None = None
+    in_container: bool = False
+    """Set when the page asked for the build to run in an Apptainer image."""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def say(self, text: str, level: str = "info") -> None:
@@ -357,6 +359,10 @@ def run_job(
             _run_on_slurm(job, molecule, settings, base)
             return
 
+        if job.in_container:
+            _run_in_container(job, molecule, settings, base)
+            return
+
         outcomes = run(molecule, settings, output=base)
 
         outputs: list[str] = []
@@ -438,6 +444,33 @@ def collect_outputs(outcomes) -> tuple[list[str], list[dict]]:
         if outcome.trace:
             trace.extend(step.to_json() for step in outcome.trace)
     return outputs, trace
+
+
+def _run_in_container(job: Job, molecule, settings, base: Path) -> None:
+    """Build inside the Apptainer image that has this backend, on this machine.
+
+    This is what makes eSEN, UMA and AllScAIP reachable from the browser: they
+    cannot share a virtualenv with MACE, so the server's own interpreter will
+    never be able to run them.
+    """
+    from ..container import ContainerError, image_for, run
+
+    try:
+        image = image_for(settings.backend)
+    except ContainerError as exc:
+        raise Ligand3DError(str(exc)) from exc
+
+    job.say(f"running in {Path(image).name}", "ok")
+    try:
+        result = run(molecule, settings, base, image=image, echo=job.say)
+    except ContainerError as exc:
+        raise Ligand3DError(str(exc)) from exc
+
+    job.result = result
+    job.result["container"] = Path(image).name
+    for path in result.get("outputs", []):
+        job.say(str(path), "ok")
+    job.state = "done"
 
 
 def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
@@ -632,10 +665,16 @@ def solvent_catalog() -> list[dict[str, Any]]:
 
 def backend_catalog() -> list[dict[str, Any]]:
     """Every registered backend with its capabilities and whether it can run."""
+    from ..container import runnable_in_container
     from ..minimize import all_backends
 
+    backends = all_backends()
+    # Worked out once for the whole list: it stats a network filesystem, and
+    # doing that per backend is how this endpoint got slow before.
+    in_container = runnable_in_container(b.caps.name for b in backends)
+
     catalog = []
-    for backend in all_backends():
+    for backend in backends:
         caps = backend.caps
         try:
             availability = backend.available()
@@ -652,6 +691,10 @@ def backend_catalog() -> list[dict[str, Any]]:
                 "ready": ready,
                 "reason": reason,
                 "hint": hint,
+                # Whether picking "in a container" makes this selectable. The
+                # menu greys out what cannot run, and without this the models
+                # the container exists for would stay greyed out.
+                "in_container": caps.name in in_container,
             }
         )
     return catalog

@@ -28,7 +28,9 @@ from typing import Any
 
 from .errors import Ligand3DError
 from .slurm import (
+    QUANTUM_CHEM_SIF,
     STANDARD_BINDS,
+    UMA_SIF,
     SlurmError,
     _snapshot_source,
     apptainer_available,
@@ -52,6 +54,47 @@ def image_for(backend_spec: str) -> Path:
         return container_for(backend_spec)
     except SlurmError as exc:  # the mace/fairchem split, described once
         raise ContainerError(str(exc)) from exc
+
+
+def image_status() -> dict[str, bool]:
+    """Which images are on this machine, checked once.
+
+    Both paths live on a network filesystem, so this is not free and must not
+    be called per backend.
+    """
+    return {
+        "mace": Path(QUANTUM_CHEM_SIF).exists(),
+        "fairchem": Path(UMA_SIF).exists(),
+    }
+
+
+def family_of(backend_id: str) -> str | None:
+    """Which image family a backend belongs to, or None if it needs no image."""
+    from .config import MODELS_BY_KEY
+    from .minimize import resolve_name
+
+    spec = MODELS_BY_KEY.get(resolve_name(backend_id))
+    if spec is None:
+        return None
+    return "fairchem" if spec.family == "fairchem" else "mace"
+
+
+def runnable_in_container(backend_ids) -> set[str]:
+    """Of these backends, the ones a container on this machine could run.
+
+    Answers the question the method menu needs: which entries to stop greying
+    out once someone chooses to run in a container. Only checkpointed models
+    qualify — a container does not conjure weights that are not there, but the
+    images carry their own copies of the packages that are missing here.
+    """
+    if not available():
+        return set()
+    present = image_status()
+    return {
+        backend_id
+        for backend_id in backend_ids
+        if (family := family_of(backend_id)) is not None and present.get(family)
+    }
 
 
 def would_help(backend_spec: str) -> bool:

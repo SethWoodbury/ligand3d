@@ -619,3 +619,44 @@ class TestWeightResolutionIsCached:
         cfg.resolve_weights("mace-off")
         cfg.resolve_weights.cache_clear()
         assert cfg.resolve_weights.cache_info().currsize == 0
+
+
+class TestWhereABuildRuns:
+    """The page picks one of three places to run. The wire format is a single
+    value rather than two booleans, because "in a container" and "on a GPU
+    node" are alternatives and setting both is not a thing."""
+
+    def test_local_is_the_default(self, session):
+        base, tmp_path = session
+        job = _run(base, "CCO", _settings(tmp_path))
+        assert job["state"] == "done"
+        assert job.get("slurm_job_id") is None
+        assert not (job.get("result") or {}).get("container")
+
+    def test_an_unknown_place_falls_back_to_local_rather_than_failing(self, session):
+        """A client sending something unexpected should still get a build."""
+        base, tmp_path = session
+        job = _run(base, "CCO", _settings(tmp_path, where="somewhere-else"))
+        assert job["state"] == "done"
+
+    def test_asking_for_a_container_without_apptainer_fails_loudly(
+        self, session, monkeypatch
+    ):
+        """It must not quietly run locally and pretend it honoured the request:
+        the whole point of choosing a container is that the local environment
+        cannot run the method."""
+        import ligand3d.container as container_mod
+
+        monkeypatch.setattr(container_mod, "apptainer_available", lambda: False)
+        base, tmp_path = session
+        job = _run(base, "CCO", _settings(tmp_path, where="container"))
+        assert job["state"] == "error"
+        assert "apptainer" in (job["error"] or "")
+
+    def test_backends_report_what_a_container_could_run(self, session):
+        """Without this the menu would keep greying out exactly the models the
+        container exists for."""
+        base, _ = session
+        data = _get(base, "/api/backends")
+        assert set(data["container"]) == {"available", "images"}
+        assert all("in_container" in b for b in data["backends"])
