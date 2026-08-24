@@ -508,3 +508,116 @@ class TestAvailabilityChecksStayCheap:
         found, torch_loaded, mace_loaded = probe.stdout.split()
         assert found == "True"
         assert torch_loaded == "False" and mace_loaded == "False"
+
+
+class TestNitroGroups:
+    """A nitro group is charge-separated on paper and symmetric in reality.
+
+    `[N+](=O)[O-]` puts a formal +1 on nitrogen and -1 on one oxygen while the
+    molecule is neutral overall, and the two N-O bonds are written as one
+    double and one single. Both oxygens are actually equivalent, so the test of
+    whether this is handled properly is geometric: the two bonds should come
+    out the same length despite being written differently.
+    """
+
+    NITROPHENOL = "Oc1ccc(cc1)[N+](=O)[O-]"
+
+    def test_charges_land_on_the_right_atoms(self):
+        molecule = from_smiles(self.NITROPHENOL)
+        charges = {
+            (a.GetSymbol(), a.GetFormalCharge())
+            for a in molecule.mol.GetAtoms()
+            if a.GetFormalCharge()
+        }
+        assert charges == {("N", 1), ("O", -1)}
+        assert molecule.formal_charge == 0
+
+    @pytest.mark.parametrize(
+        "smiles",
+        [
+            "Oc1ccc(cc1)[N+](=O)[O-]",
+            "O=[N+]([O-])c1ccc(O)cc1",
+            "c1cc(ccc1[N+](=O)[O-])O",
+        ],
+    )
+    def test_every_spelling_is_the_same_molecule(self, smiles):
+        assert from_smiles(smiles).smiles == from_smiles(self.NITROPHENOL).smiles
+
+    def test_the_nitro_nitrogen_is_not_a_stereocenter(self):
+        molecule = from_smiles(self.NITROPHENOL)
+        assert molecule.stereo.unassigned_centers == ()
+
+    def test_the_two_n_o_bonds_come_out_equal(self):
+        """The formal single/double split is a drawing convention, not geometry.
+
+        Experiment puts both at 1.223 A in nitrobenzene. A force field that
+        took the written bond orders literally would give one short and one
+        long, which would be a wrong structure that looks fine in a viewer.
+        """
+        from rdkit.Chem import rdMolTransforms as transforms
+
+        outcome = build(
+            from_smiles(self.NITROPHENOL),
+            Settings(backend="mmff94", sample=1, trace=False),
+        )
+        mol = outcome.mol_3d
+        conformer = mol.GetConformer()
+        nitrogen = next(a for a in mol.GetAtoms() if a.GetSymbol() == "N")
+        oxygens = [n.GetIdx() for n in nitrogen.GetNeighbors() if n.GetSymbol() == "O"]
+        assert len(oxygens) == 2
+
+        lengths = [
+            transforms.GetBondLength(conformer, nitrogen.GetIdx(), o) for o in oxygens
+        ]
+        assert abs(lengths[0] - lengths[1]) < 0.02, lengths
+        assert all(1.15 < d < 1.30 for d in lengths), lengths
+
+    def test_the_nitro_group_stays_planar_with_the_ring(self):
+        from rdkit.Chem import rdMolTransforms as transforms
+
+        outcome = build(
+            from_smiles(self.NITROPHENOL),
+            Settings(backend="mmff94", sample=1, trace=False),
+        )
+        mol = outcome.mol_3d
+        conformer = mol.GetConformer()
+        nitrogen = next(a for a in mol.GetAtoms() if a.GetSymbol() == "N")
+        oxygen = next(n.GetIdx() for n in nitrogen.GetNeighbors() if n.GetSymbol() == "O")
+        carbon = next(n for n in nitrogen.GetNeighbors() if n.GetSymbol() == "C")
+        ring = next(
+            n.GetIdx() for n in carbon.GetNeighbors()
+            if n.GetIdx() != nitrogen.GetIdx() and n.GetSymbol() == "C"
+        )
+        twist = abs(
+            transforms.GetDihedralDeg(conformer, ring, carbon.GetIdx(),
+                                      nitrogen.GetIdx(), oxygen)
+        )
+        assert min(twist, abs(180 - twist)) < 10, twist
+
+    def test_it_survives_a_cif_round_trip(self, tmp_path):
+        """The charge separation has to come back on the same two atoms."""
+        from ligand3d.embed import embed
+        from ligand3d.molecule import read_3d
+        from ligand3d.write import write_cif
+
+        molecule = from_smiles(self.NITROPHENOL)
+        write_cif(tmp_path / "n.cif", embed(molecule), resname="LIG",
+                  smiles=molecule.smiles)
+        recovered = read_3d(tmp_path / "n.cif")
+        assert Chem.MolToSmiles(Chem.RemoveHs(recovered)) == molecule.smiles
+
+    def test_the_nitro_bonds_are_not_flagged_aromatic(self):
+        """Kekulizing the ring must not spill onto the substituent."""
+        from ligand3d.embed import embed
+        from ligand3d.write import to_cif_string
+
+        text = to_cif_string(embed(from_smiles(self.NITROPHENOL)), resname="LIG",
+                             smiles="x")
+        # Five fields is a _chem_comp_bond row; the _chem_comp row is shorter.
+        rows = [
+            line.split() for line in text.splitlines()
+            if line.startswith("LIG ") and len(line.split()) == 5
+        ]
+        nitro = [r for r in rows if r[1].startswith("N") or r[2].startswith("N")]
+        assert nitro, "no nitro bonds found"
+        assert all(r[4] == "N" for r in nitro), nitro

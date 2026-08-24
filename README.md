@@ -4,14 +4,16 @@ Turn a 2D molecule into a minimized 3D structure.
 
 You give it a SMILES string, a MOL/SDF file, or a structure you drew in the browser.
 It builds a 3D conformer, optionally sets the protonation state, minimizes with the
-level of theory you choose, optionally searches conformers, and writes a `.pdb`.
+level of theory you choose, optionally searches conformers, and writes mmCIF, SDF, PDB,
+a Rosetta params set, or an annotated CIF for RFdiffusion4 — mmCIF by default, because it
+carries the bond orders and formal charges PDB cannot.
 
 ```bash
 ligand3d build "O=C1CN2CCC1CC2" -o quinuclidinone          # writes .cif + .sdf
 ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --backend gfn2 -o gabapentin
 ligand3d build "C[C@@H](O)[C@H](N)C(=O)O" --backend mmff94,gfn2 --confs 20 -o threonine
 ligand3d build "<smiles>" --params --params-code LIG        # + a Rosetta params file
-ligand3d build "<smiles>" --trace --trajectory              # energy per step, and the path
+ligand3d build "<smiles>" --trajectory                      # save the geometry at every step
 ligand3d fetch "3-Cyano-7-ethoxycoumarin"  # look a molecule up by name
 ligand3d sketch                        # draw it, then the pipeline runs on what you drew
 ligand3d doctor                        # what's installed, what isn't, and why
@@ -23,7 +25,7 @@ Every stage is also its own command, so a script can run one step at a time:
 ligand3d stereo     "C[C@@H](O)[C@H](N)C(=O)O"   # report R/S and E/Z, build nothing
 ligand3d protonate  "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --all
 ligand3d embed      "<smiles>" -o raw            # 2D -> 3D, no minimization
-ligand3d minimize   raw.sdf -o min --backend gfn2 --trace
+ligand3d minimize   raw.sdf -o min --backend gfn2
 ligand3d conformers "<smiles>" -n 50 -o ensemble
 ligand3d params     ensemble.sdf --code LIG
 ligand3d convert    min.cif min.pdb
@@ -72,12 +74,12 @@ uv pip install -e ".[xtb,protonation,mace]"
 
 | id | kind | takes charge | solvation | speed (gabapentin) |
 |---|---|---|---|---|
-| `mmff94` | classical FF | implicit in typing | no | 5 ms |
-| `uff` | classical FF | implicit in typing | no | 5 ms |
-| `gfnff` | classical FF | yes | ALPB | ~0.1 s |
-| `gfn2` | semi-empirical | yes | ALPB | 0.9 s |
-| `gfn1` | semi-empirical | yes | ALPB | ~0.8 s |
-| ML potentials | see below | varies | no | 0.5 s and up |
+| `mmff94` | classical FF | implicit in typing | no | 4 ms |
+| `uff` | classical FF | implicit in typing | no | 4 ms |
+| `gfnff` | generic FF (xtb) | yes | ALPB | 0.06 s |
+| `gfn2` | semi-empirical | yes | ALPB | 0.33 s |
+| `gfn1` | semi-empirical | yes | ALPB | 0.57 s |
+| ML potentials | see below | varies | no | 0.5 s to a minute |
 
 Chain them with a comma — cheap first, expensive last:
 
@@ -140,13 +142,55 @@ which is why they are the wrong tool for a zwitterion regardless of charge handl
 
 ## Machine-learned force fields
 
-**On this cluster the checkpoints live in `/net/databases/huggingface/mlFF_models/`, and
-ligand3d finds them there automatically** — for example `mace-polar` resolves to
-`models--ACEsuit--mace-polar-1-beta/MACE-POLAR-1-M.model`. `ligand3d models -v` prints the
-resolved path for every model so there is no guessing about which file is being loaded. That path is one of the built-in probe
-locations, so nothing needs configuring — `ligand3d doctor` prints exactly which file it
-resolved for each model. On any other machine, point `LIGAND3D_<MODEL>` at a checkpoint
-or list it under `[weights]` in `~/.config/ligand3d/config.toml`.
+### Where the weights come from
+
+**At the IPD, nothing needs configuring.** The checkpoints are already on
+`/net/databases/huggingface/mlFF_models/`, which is one of the built-in probe locations,
+so `mace-polar` resolves to `models--ACEsuit--mace-polar-1-beta/MACE-POLAR-1-M.model`
+without being told. `ligand3d models -v` prints the resolved path for every model, and
+`ligand3d doctor` shows every location it looked in, so a miss is diagnosable rather than
+mysterious. That store has its own `README.md` recording who added what and from where —
+read it before adding a checkpoint.
+
+Resolution runs in this order, first hit wins:
+
+1. `LIGAND3D_<MODEL>` — e.g. `LIGAND3D_MACE_OFF=/path/to/MACE-OFF23_medium.model`
+2. `[weights]` in `~/.config/ligand3d/config.toml`
+3. the probe directories: `/net/databases/huggingface/mlFF_models`,
+   `/mnt/projects/ml/mlff/models`, then `~/.cache/ligand3d/weights`
+
+**Anywhere else, put the files in `~/.cache/ligand3d/weights/`** — the last probe
+directory — and they are found with no configuration, exactly as at the IPD. The
+HuggingFace cache layout (`models--<org>--<name>/`) is understood as well as a flat
+directory, so an existing populated `HF_HOME` works if you point a probe directory at it.
+
+Where to actually get them differs by family, and the directory names are a *cache naming
+convention*, not evidence of a HuggingFace repo:
+
+| family | source | notes |
+|---|---|---|
+| `mace-off`, `mace-off-24` | [github.com/ACEsuit/mace-off](https://github.com/ACEsuit/mace-off) | **OFF24 is medium-only by design** — no small or large was ever published |
+| `mace-mp` | [github.com/ACEsuit/mace-mp](https://github.com/ACEsuit/mace-mp) | |
+| `mace-mh`, `mace-mh-1` | [github.com/ACEsuit/mace-foundations](https://github.com/ACEsuit/mace-foundations) releases | |
+| `mace-omol` | the OMol25 release | |
+| `uma-s`, `uma-s-1p2`, `uma-m` | [huggingface.co/facebook/UMA](https://huggingface.co/facebook/UMA) — **gated** | accept the FAIR Chemistry License v1, make a read token, then `HF_TOKEN=hf_… bash download_uma_models.sh` from the IPD store |
+| `uma-sm` | FAIR-Chem GitHub | an older small checkpoint, superseded by 1.1/1.2 |
+| `esen*`, `allscaip*` | FAIR Chemistry, OMol25 family | added to the IPD store in June 2026 with no recorded upstream URL; ask before assuming one |
+| `aimnet2` | **downloads itself** | caches in `~/.cache/aimnet`; this is why its first call costs 14 s and why it needs no entry here |
+
+Two warnings that are not about convenience:
+
+- **MACE-POLAR is beta and not public.** It is early access to the model from
+  arXiv 2602.19411v1, the authors are not the Baker Lab, and the store's README says to
+  keep the checkpoints within the lab. The `-beta` in the directory name flags exactly
+  this. Do not redistribute it, and do not expect to download it.
+- **`uma-s-1` is archived upstream over an extensivity bug.** ligand3d does not carry that
+  alias, and neither should you — `uma-s` is 1.1.
+
+### Which model, and what it costs
+
+### Which model, and what it costs
+
 
 The column that matters most is **charge**: a potential with no charge channel cannot
 tell a carboxylate from a neutral acid, so ligand3d refuses that pairing rather than
@@ -923,7 +967,14 @@ on request:
 ```bash
 ligand3d build "<smiles>" -f cif,pdb,sdf -o thing    # all three
 ligand3d build "<smiles>" -o thing.pdb               # an explicit suffix selects a format
+ligand3d build "<smiles>" -f cif,annotated -o thing  # + thing.annotated.cif for RFdiffusion4
 ```
+
+The four formats are `cif`, `sdf`, `pdb` and `annotated` — the last writes
+`<name>.annotated.cif` beside the ordinary one and is
+[described below](#annotated-cif-for-rfdiffusion4-proteina). It keeps the `.cif`
+extension because it *is* an mmCIF; the double extension only says which of the two
+carries the conditioning.
 
 Nothing in the params path needs a PDB — `molfile_to_params` reads the SDF directly.
 
@@ -932,7 +983,15 @@ reports without writing anything, which is the quick way to try a molecule befor
 committing to a filename.
 
 Charges survive everywhere: the mmCIF carries `pdbx_formal_charge` per atom, so a
-zwitterion reads back as `[NH3+]CC1(CC(=O)[O-])CCCCC1` with both sites intact.
+zwitterion reads back as `[NH3+]CC1(CC(=O)[O-])CCCCC1` with both sites intact, and a
+nitro group as `[N+](=O)[O-]` with the charge separation on the right two atoms.
+Neutral atoms are written as `0` rather than `?`, because `?` means *unknown* and a
+neutral atom is not an atom of unknown charge.
+
+**Aromatic bonds are kekulized**, three `SING` and three `DOUB` around benzene with
+`pdbx_aromatic_flag Y`, the way the PDB Chemical Component Dictionary does it. Writing
+every aromatic bond as `SING` — which is what a naive mapping produces — says the ring is
+saturated to anything that reads bond orders rather than re-perceiving aromaticity.
 
 PDB output has unique atom names, CONECT records, formal charges, and provenance REMARKs.
 Every file written is read back and checked before the command returns.
@@ -1021,8 +1080,8 @@ typing. On top of it:
 - **The three-letter code is checked** against Rosetta's `residue_types.txt` before any
   work happens. `--allow-code-conflict` overrides it. (`BZO` and `ALA` are both taken,
   for instance.)
-- Atom names are preserved with `--keep-names`, so a constraint file that refers to them
-  keeps working.
+- **Atom names are preserved.** ligand3d always passes `--keep-names` to
+  `molfile_to_params.py`, so a constraint file that refers to them keeps working.
 
 `ligand3d doctor` reports where it found `molfile_to_params.py`; override with
 `LIGAND3D_MOLFILE_TO_PARAMS` or `[rosetta]` in the config.

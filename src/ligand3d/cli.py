@@ -1085,10 +1085,6 @@ def version() -> None:
     console.print(__version__)
 
 
-if __name__ == "__main__":  # pragma: no cover
-    app()
-
-
 # --------------------------------------------------------------------------
 # Individual pipeline steps, for scripting one stage at a time
 # --------------------------------------------------------------------------
@@ -1385,3 +1381,11 @@ def convert(
         f"({mol.GetNumAtoms()} atoms, {mol.GetNumConformers()} conformer(s))"
     )
     _write_plain(output, mol, None, (suffix,), resname or "LIG", [], [])
+
+
+# Must stay last: `python -m ligand3d.cli` executes this at the point it
+# appears, so any @app.command() defined below it would never be
+# registered. Seven of them were, and were invisible to `-m` — which is
+# exactly how the container and SLURM paths invoke this module.
+if __name__ == "__main__":  # pragma: no cover
+    app()

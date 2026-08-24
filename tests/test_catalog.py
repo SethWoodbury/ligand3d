@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from ligand3d.catalog import build_catalog, summarize
@@ -284,3 +287,60 @@ class TestTimingHonesty:
         """aimnet2 spends 14 s constructing itself and 0.6 s minimizing."""
         by_id = {m.id: m for m in build_catalog()}
         assert by_id["aimnet2"].load_seconds > 5
+
+
+class TestTheReadmeMatchesTheCode:
+    """Documentation drifts silently, and a wrong number in a README is worse
+    than no number — it gets believed and quoted.
+
+    These caught three real drifts: the backend table listed gfn2 as slower
+    than gfn1 (backwards, and 3x off), the intro said builds write a `.pdb`
+    long after mmCIF became the default, and two flags were documented that no
+    longer exist.
+    """
+
+    README = Path(__file__).resolve().parents[1] / "README.md"
+
+    def test_the_backend_speed_table_matches_the_catalog(self):
+        text = self.README.read_text()
+        speeds = {m.id: m.speed for m in build_catalog()}
+        for backend in ("mmff94", "uff", "gfnff", "gfn2", "gfn1"):
+            row = re.search(rf"^\| `{re.escape(backend)}` \|.*$", text, re.M)
+            assert row, f"{backend} has no row in the backends table"
+            quoted = row.group(0).rsplit("|", 2)[1].strip()
+            assert quoted == speeds[backend], (
+                f"README says {backend} takes {quoted}, catalog says {speeds[backend]}"
+            )
+
+    def test_every_documented_flag_exists(self):
+        """A README flag that no longer exists fails as soon as it is copied."""
+        import subprocess
+        import sys
+
+        text = self.README.read_text()
+        commands = re.findall(r"^ligand3d ([a-z][a-z-]*)", text, re.M)
+        known: set[str] = set()
+        for command in sorted(set(commands)):
+            result = subprocess.run(
+                [sys.executable, "-m", "ligand3d.cli", command, "--help"],
+                capture_output=True, text=True, timeout=180,
+            )
+            if result.returncode == 0:
+                known |= set(re.findall(r"(--[a-z][a-z0-9-]+)", result.stdout))
+
+        # Flags belonging to other tools that legitimately appear in examples.
+        foreign = {
+            "--index-url", "--local-dir", "--no-deps", "--strict", "--cfg",
+            "--with-test-dataset", "--keep-names", "--help",
+        }
+        used = set()
+        for block in re.findall(r"```bash\n(.*?)```", text, re.S):
+            for line in block.replace("\\\n", " ").splitlines():
+                if line.strip().startswith("ligand3d "):
+                    used |= set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", line))
+        unknown = sorted(used - known - foreign)
+        assert unknown == [], f"documented but not real options: {unknown}"
+
+    def test_the_intro_does_not_claim_pdb_is_the_default(self):
+        head = self.README.read_text()[:1200]
+        assert "mmCIF by default" in head

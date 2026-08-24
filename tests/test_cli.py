@@ -195,3 +195,58 @@ class TestInformationalCommands:
     def test_config_show_without_a_file_is_not_an_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LIGAND3D_CONFIG", str(tmp_path / "nope.toml"))
         assert run("config", "--show").exit_code == 0
+
+
+class TestEveryCommandIsReachableBothWays:
+    """`python -m ligand3d.cli` executed app() partway down the file.
+
+    Seven commands were defined below that point and never registered, so they
+    were invisible to `-m` while working fine through the installed entry
+    point. That split matters here specifically: the container and SLURM paths
+    both invoke this module with `-m`, and `slurm-run` only worked because it
+    happened to be defined above the block.
+    """
+
+    COMMANDS = (
+        "build", "backends", "doctor", "config", "sketch", "models", "fetch",
+        "solvents", "version", "slurm", "stereo", "embed", "minimize",
+        "conformers", "protonate", "params", "convert",
+    )
+
+    def _run_module(self, *args):
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, "-m", "ligand3d.cli", *args],
+            capture_output=True, text=True, timeout=180,
+        )
+
+    @pytest.mark.parametrize("command", COMMANDS)
+    def test_reachable_through_the_app_object(self, command):
+        result = run(command, "--help")
+        assert result.exit_code == 0, result.output
+
+    @pytest.mark.parametrize("command", COMMANDS)
+    def test_reachable_through_python_m(self, command):
+        result = self._run_module(command, "--help")
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_the_two_entry_points_agree(self):
+        """Any future drift shows up here rather than in a container."""
+        listed = self._run_module("--help")
+        assert listed.returncode == 0
+        for command in self.COMMANDS:
+            assert command in listed.stdout, f"{command} missing from -m help"
+
+    def test_the_main_guard_is_the_last_thing_in_the_file(self):
+        """Anything after it is dead to `-m`, silently."""
+        from pathlib import Path
+
+        source = Path(__file__).resolve().parents[1] / "src" / "ligand3d" / "cli.py"
+        lines = [line for line in source.read_text().splitlines() if line.strip()]
+        guard = max(
+            i for i, line in enumerate(lines) if line.startswith('if __name__ ==')
+        )
+        after = [line for line in lines[guard + 1:] if not line.startswith((" ", "\t", "#"))]
+        assert after == [], f"defined after the main guard, invisible to -m: {after}"
