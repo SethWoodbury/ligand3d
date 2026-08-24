@@ -313,26 +313,33 @@ class TestTheReadmeMatchesTheCode:
             )
 
     def test_every_documented_flag_exists(self):
-        """A README flag that no longer exists fails as soon as it is copied."""
-        import subprocess
-        import sys
+        """A README flag that no longer exists fails as soon as it is copied.
 
-        text = self.README.read_text()
-        commands = re.findall(r"^ligand3d ([a-z][a-z-]*)", text, re.M)
-        known: set[str] = set()
-        for command in sorted(set(commands)):
-            result = subprocess.run(
-                [sys.executable, "-m", "ligand3d.cli", command, "--help"],
-                capture_output=True, text=True, timeout=180,
-            )
-            if result.returncode == 0:
-                known |= set(re.findall(r"(--[a-z][a-z0-9-]+)", result.stdout))
+        Introspects the command objects rather than parsing `--help`. The help
+        text is rendered by rich and wraps to the terminal, so parsing it
+        passes on a wide terminal and collapses on a narrow one — which is
+        exactly what this test did on CI the first time.
+        """
+        import typer
+
+        from ligand3d.cli import app
+
+        command = typer.main.get_command(app)
+        known = {
+            option
+            for sub in command.commands.values()
+            for param in sub.params
+            for option in param.opts
+            if option.startswith("--")
+        }
+        assert len(known) > 40, f"introspection found only {len(known)} options"
 
         # Flags belonging to other tools that legitimately appear in examples.
         foreign = {
             "--index-url", "--local-dir", "--no-deps", "--strict", "--cfg",
             "--with-test-dataset", "--keep-names", "--help",
         }
+        text = self.README.read_text()
         used = set()
         for block in re.findall(r"```bash\n(.*?)```", text, re.S):
             for line in block.replace("\\\n", " ").splitlines():
@@ -340,6 +347,22 @@ class TestTheReadmeMatchesTheCode:
                     used |= set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", line))
         unknown = sorted(used - known - foreign)
         assert unknown == [], f"documented but not real options: {unknown}"
+
+    def test_the_flag_check_would_notice_a_bad_flag(self):
+        """The check above is only worth having if it can fail."""
+        import typer
+
+        from ligand3d.cli import app
+
+        command = typer.main.get_command(app)
+        known = {
+            option
+            for sub in command.commands.values()
+            for param in sub.params
+            for option in param.opts
+        }
+        assert "--confs" in known
+        assert "--no-such-flag" not in known
 
     def test_the_intro_does_not_claim_pdb_is_the_default(self):
         head = self.README.read_text()[:1200]

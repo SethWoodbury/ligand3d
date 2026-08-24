@@ -214,12 +214,16 @@ class TestEveryCommandIsReachableBothWays:
     )
 
     def _run_module(self, *args):
+        import os
         import subprocess
         import sys
 
+        # A wide terminal, because rich wraps help text to fit and a narrow
+        # CI terminal would split the command names this test looks for.
         return subprocess.run(
             [sys.executable, "-m", "ligand3d.cli", *args],
             capture_output=True, text=True, timeout=180,
+            env={**os.environ, "COLUMNS": "200", "TERM": "dumb"},
         )
 
     @pytest.mark.parametrize("command", COMMANDS)
