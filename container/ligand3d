@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# ligand3d launcher.
+#
+# Put this directory on your PATH and `ligand3d` works with nothing installed:
+#
+#     export PATH=/net/software/containers/users/woodbuse/ligand3d:$PATH
+#     ligand3d build "O=C1CN2CCC1CC2" -o quin.cif
+#
+# It picks an image from the backend you asked for, because the neural
+# potentials cannot share an environment. MMFF94, UFF, GFN-FF, GFN1, GFN2,
+# protonation, name lookup, the sketcher, Rosetta params and the annotated CIF
+# all live in ligand3d.sif; MACE and AIMNet2 come from the lab's quantum_chem
+# image, and eSEN/UMA/AllScAIP from the uma image.
+#
+# The source is baked into ligand3d.sif, so a run is pinned to a version rather
+# than to whatever happens to be checked out. When dispatching to one of the
+# other images, the package is copied *out of that same sif* into a cache, so
+# the code cannot drift from the image it was released with.
+
+set -euo pipefail
+
+HERE="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+
+CORE_SIF="${LIGAND3D_SIF:-$HERE/ligand3d.sif}"
+MACE_SIF="${LIGAND3D_SIF_MACE:-/net/software/containers/users/woodbuse/quantum_chem/quantum_chem-20260604.sif}"
+FAIRCHEM_SIF="${LIGAND3D_SIF_FAIRCHEM:-/net/software/containers/users/woodbuse/quantum_chem/uma-20260527.sif}"
+CACHE="${LIGAND3D_LAUNCHER_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/ligand3d/launcher}"
+
+die() { printf 'ligand3d: %s\n' "$*" >&2; exit 1; }
+
+[[ -f $CORE_SIF ]] || die "no image at $CORE_SIF. Set LIGAND3D_SIF to point at one."
+command -v apptainer >/dev/null || die "apptainer is not on PATH; this launcher needs it."
+
+# --- which image? -----------------------------------------------------------
+# Read the backend chain, then let the last unusual name in it decide. A chain
+# is only ever cheap-then-expensive, so the expensive end is what needs the
+# heavier image.
+backend=""
+wants_slurm=0
+for ((i = 1; i <= $#; i++)); do
+    case "${!i}" in
+        -b|--backend) j=$((i + 1)); [[ $j -le $# ]] && backend="${!j}" ;;
+        --backend=*)  backend="${!i#--backend=}" ;;
+        --slurm)      wants_slurm=1 ;;
+    esac
+done
+
+if [[ $wants_slurm == 1 ]]; then
+    die "--slurm needs sbatch, which does not work inside a container: its auth
+plugins cannot be reached from one. Submit from a checkout instead —
+  git clone git@github.com:SethWoodbury/ligand3d && cd ligand3d
+  uv pip install -e '.[xtb,protonation]'
+Everything else here works unchanged."
+fi
+
+image="$CORE_SIF"
+family="core"
+case ",${backend}," in
+    *,esen*|*,uma-*|*,allscaip*)                image="$FAIRCHEM_SIF"; family="fairchem" ;;
+    *,mace*|*,aimnet2,*|*aimnet2)               image="$MACE_SIF";     family="mace" ;;
+esac
+
+if [[ $family != core && ! -f $image ]]; then
+    die "backend '$backend' needs $image, which is not on this machine.
+Set LIGAND3D_SIF_MACE or LIGAND3D_SIF_FAIRCHEM, or choose a backend the core
+image covers: mmff94, uff, gfnff, gfn1, gfn2."
+fi
+
+# --- binds ------------------------------------------------------------------
+binds=()
+for path in /home /net /mnt /projects /scratch; do
+    [[ -d $path ]] && binds+=(--bind "$path:$path")
+done
+# Whatever directory the command was run from, so relative output paths land
+# where the user expects rather than inside the image.
+cwd="$(pwd -P)"
+case "$cwd" in /home/*|/net/*|/mnt/*|/projects/*|/scratch/*) ;; *) binds+=(--bind "$cwd:$cwd") ;; esac
+
+if [[ $family == core ]]; then
+    # Tells `doctor` it is inside the launcher, so it explains that the neural
+    # potentials are dispatched elsewhere rather than telling someone to pip
+    # install torch into a read-only image.
+    exec apptainer run "${binds[@]}" --pwd "$cwd" --env LIGAND3D_LAUNCHER=1 "$image" "$@"
+fi
+
+# --- dispatching to an image that has no ligand3d in it ---------------------
+# Copy the package out of the core sif once, keyed by that image's identity, so
+# a rebuilt image gets a fresh copy and a stale one is never reused.
+stamp="$(stat -c '%Y-%s' "$CORE_SIF")"
+payload="$CACHE/$stamp"
+if [[ ! -d $payload/ligand3d ]]; then
+    mkdir -p "$payload"
+    apptainer exec --bind "$payload:/out" "$CORE_SIF" sh -c '
+        set -e
+        src=$(python -c "import ligand3d, os; print(os.path.dirname(ligand3d.__file__))")
+        cp -r "$src" /out/
+    ' || die "could not take the package out of $CORE_SIF"
+fi
+
+nv=()
+[[ $family != core ]] && command -v nvidia-smi >/dev/null 2>&1 && nv=(--nv)
+
+exec apptainer exec "${nv[@]}" "${binds[@]}" --bind "$payload:$payload" --pwd "$cwd" \
+    --env "PYTHONPATH=$payload" \
+    --env "HF_HOME=${HF_HOME:-/net/databases/huggingface}" \
+    --env TORCHDYNAMO_DISABLE=1 \
+    --env PYTHONNOUSERSITE=1 \
+    "$image" python -m ligand3d.cli "$@"

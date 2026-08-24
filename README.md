@@ -70,6 +70,76 @@ uv pip install -e ".[xtb,protonation,mace]"
 `[mace]` and `[fairchem]` cannot coexist — see
 [the split](#the-mace--fairchem-split--read-this-before-installing).
 
+## Sharing it with other people
+
+A labmate should not have to build an environment to use this. `container/build.sh`
+produces a directory holding a self-contained image and a launcher; they add one entry to
+`PATH` and everything works:
+
+```bash
+export PATH=/net/software/containers/users/woodbuse/ligand3d:$PATH
+
+ligand3d build "O=C1CN2CCC1CC2" -b mmff94,gfn2 -o quin.cif
+ligand3d fetch "3-Cyano-7-ethoxycoumarin"
+ligand3d sketch
+```
+
+Nothing is installed, nothing is cloned, and no venv is created. **The source is baked
+into the image**, so a run is pinned to a released version rather than to whatever happens
+to be checked out — a colleague's results cannot change because you were mid-edit. The
+trade is that a code change needs a rebuild before it reaches anyone.
+
+To cut a release:
+
+```bash
+container/build.sh                    # into ./dist
+container/build.sh /net/software/containers/users/woodbuse/ligand3d
+```
+
+The build runs `container/selfcheck.py` inside the image and **fails rather than producing
+one that cannot do what it claims** — imports, a JRE for OPSIN, every required backend, and
+a real end-to-end build. That check has already earned itself twice: once on a missing
+`libgomp1`, which made GFN1/GFN2 fail at import with a message naming no library, and once
+on `xtb` being absent so GFN-FF was silently unavailable.
+
+### What is in the image, and what the launcher does
+
+The image is **394 MB** and covers MMFF94, UFF, GFN-FF, GFN1, GFN2, pH protonation,
+offline IUPAC name lookup, conformer search, the sketcher, Rosetta params and the
+annotated CIF. It deliberately has no torch — that alone is several gigabytes, and the
+MACE and fairchem sides cannot share an environment anyway.
+
+The neural potentials still work. The launcher reads the backend you asked for and picks
+the image:
+
+| backend | runs in |
+|---|---|
+| `mmff94`, `uff`, `gfnff`, `gfn1`, `gfn2` | `ligand3d.sif` |
+| `mace-*`, `aimnet2` | the lab's `quantum_chem` image |
+| `esen*`, `uma-*`, `allscaip*` | the lab's `uma` image |
+
+For those, the package is copied **out of `ligand3d.sif` itself** into a cache keyed by
+that image's identity, so the code running against MACE is exactly the code that was
+released, and a rebuilt image never reuses a stale copy.
+
+Two things do not work from a container, and the launcher says so rather than failing
+obscurely:
+
+- **`--slurm`** needs `sbatch`, whose auth plugins cannot be reached from inside a
+  container. Submit from a checkout.
+- **`--container`** is redundant here and nested apptainer does not work anyway; the
+  launcher already does that dispatch.
+
+### Or install it normally
+
+Nothing about the container is required. A checkout works as it always has, and is what
+you want if you are editing the code or submitting to SLURM:
+
+```bash
+git clone git@github.com:SethWoodbury/ligand3d && cd ligand3d
+uv venv && uv pip install -e ".[xtb,protonation,names]"
+```
+
 ## Backends
 
 | id | kind | takes charge | solvation | speed (gabapentin) |

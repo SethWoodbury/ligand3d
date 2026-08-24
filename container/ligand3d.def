@@ -1,0 +1,78 @@
+Bootstrap: docker
+From: python:3.12-slim-trixie
+
+%labels
+    Name         ligand3d
+    Description  2D molecule to minimized 3D structure
+    Upstream     https://github.com/SethWoodbury/ligand3d
+    Maintainer   Seth M. Woodbury
+
+%help
+    ligand3d, self-contained. The source is baked in, so this image is a
+    pinned version of the tool rather than a runtime for whatever happens to
+    be checked out.
+
+        apptainer run ligand3d.sif build "O=C1CN2CCC1CC2" -o quin.cif
+        apptainer run ligand3d.sif doctor
+        apptainer run ligand3d.sif --help
+
+    Included: MMFF94, UFF, GFN-FF, GFN1, GFN2, pH protonation, offline IUPAC
+    name lookup, the sketcher, Rosetta params, and the RFdiffusion4 annotated
+    CIF writer.
+
+    Not included: the neural potentials. torch alone is several gigabytes and
+    the MACE and fairchem sides cannot share an environment, so those live in
+    their own images. The `ligand3d` wrapper script beside this file picks the
+    right image from the backend you asked for, which is the reason to use the
+    wrapper rather than calling apptainer directly.
+
+    Nested apptainer does not work, so `--container` and `--slurm` cannot be
+    used from inside this image. The wrapper handles both on the host.
+
+%post
+    set -eux
+
+    # apptainer bind-mounts $HOME during the build, so without this the
+    # builder's ~/.local can shadow what is being installed here.
+    export PYTHONNOUSERSITE=1
+
+    # libgomp1 is the OpenMP runtime. The slim base omits it, and tblite's
+    # wheel bundles gfortran/blas/lapack but not that — so GFN1 and GFN2 fail
+    # at import with a message about a "C extension" that names no library.
+    #
+    # A JRE for OPSIN, which is what makes `ligand3d fetch` resolve systematic
+    # names with no network. Headless keeps it to what is actually needed.
+    #
+    # xtb is the standalone binary GFN-FF runs through; if the distribution
+    # has no package the build continues without it and GFN-FF is simply
+    # unavailable, which the self-check reports rather than fails on.
+    apt-get update
+    apt-get install -y --no-install-recommends libgomp1 default-jre-headless
+    apt-get install -y --no-install-recommends xtb || echo "no xtb package; GFN-FF will be unavailable"
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+    pip install --no-cache-dir --upgrade pip
+    pip install --no-cache-dir "/opt/ligand3d-src[xtb,protonation,names]"
+
+    # The source was only needed to build the wheel; the installed package is
+    # what runs. Leaving it would invite editing a copy that has no effect.
+    rm -rf /opt/ligand3d-src
+
+    # Fail the build rather than ship an image that cannot do what it claims.
+    python /opt/selfcheck.py
+    rm -f /opt/selfcheck.py
+
+%files
+    . /opt/ligand3d-src
+    container/selfcheck.py /opt/selfcheck.py
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    # Keeps a labmate's ~/.local/lib from shadowing the pinned packages, which
+    # is the whole point of freezing this.
+    export PYTHONNOUSERSITE=1
+
+%runscript
+    exec ligand3d "$@"

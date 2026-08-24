@@ -38,3 +38,7 @@ confcross.xyz
 ensemble_energies.log
 *.mdrestart
 uv.lock
+
+# built container releases
+dist/
+*.sif

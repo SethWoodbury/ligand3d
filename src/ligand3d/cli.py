@@ -750,6 +750,20 @@ def doctor() -> None:
         "the network.[/dim]"
     )
 
+    # Inside the launcher's core image the neural potentials are genuinely
+    # absent, but they are not out of reach — the launcher sends those backends
+    # to another image. Without this, `doctor` tells someone to pip install
+    # torch into a read-only container to get something that already works.
+    if os.environ.get("LIGAND3D_LAUNCHER"):
+        console.print(
+            "\n[bold]launcher[/bold]\n"
+            "  [green]✓[/green] running through the ligand3d launcher\n"
+            "  [dim]The neural potentials above show as unavailable because this "
+            "image does not carry torch. Ask for one anyway — the launcher runs "
+            "MACE and AIMNet2 in the quantum_chem image and eSEN/UMA/AllScAIP in "
+            "the uma image. Ignore the pip hints; they do not apply here.[/dim]"
+        )
+
     # Only mentioned where it would work, so this stays quiet off the cluster.
     from .sketch.session import slurm_status
 

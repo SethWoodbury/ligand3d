@@ -10,6 +10,7 @@ bottom, since not every machine has it.
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -194,3 +195,74 @@ class TestTheMenuKnowsWhatAContainerCouldRun:
         from ligand3d.container import image_status
 
         assert set(image_status()) == {"mace", "fairchem"}
+
+
+class TestTheLauncher:
+    """The wrapper script that lets a labmate run ligand3d with nothing
+    installed. It is bash, so what is checkable here is its routing logic and
+    the promises in its text — but those are the parts that decide whether
+    someone's first command works."""
+
+    LAUNCHER = Path(__file__).resolve().parents[1] / "container" / "ligand3d"
+    DEF = Path(__file__).resolve().parents[1] / "container" / "ligand3d.def"
+
+    def test_it_exists_and_is_executable(self):
+        assert self.LAUNCHER.exists()
+        assert os.access(self.LAUNCHER, os.X_OK), "not executable; PATH use would fail"
+
+    def test_it_is_valid_bash(self):
+        import shutil as _shutil
+        import subprocess as _subprocess
+
+        bash = _shutil.which("bash")
+        if bash is None:
+            pytest.skip("no bash")
+        result = _subprocess.run([bash, "-n", str(self.LAUNCHER)],
+                                 capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    def test_it_routes_each_family_to_an_image(self):
+        """A backend the core image cannot run has to go somewhere else, and
+        the split is the same one the rest of the tool respects."""
+        text = self.LAUNCHER.read_text()
+        assert "FAIRCHEM_SIF" in text and "MACE_SIF" in text
+        for token in ("esen", "uma-", "allscaip", "mace", "aimnet2"):
+            assert token in text, f"{token} is not routed anywhere"
+
+    def test_it_refuses_slurm_with_a_way_forward(self):
+        """sbatch cannot reach its auth plugins from inside a container. The
+        failure is unavoidable; being told what to do instead is not."""
+        text = self.LAUNCHER.read_text()
+        assert "--slurm" in text
+        assert "uv pip install" in text, "refuses --slurm without offering an alternative"
+
+    def test_the_image_carries_what_it_claims(self):
+        """The def file's help text promises specific backends. The build's
+        self-check enforces them, so the two must agree."""
+        selfcheck = (self.DEF.parent / "selfcheck.py").read_text()
+        assert "REQUIRED_BACKENDS" in selfcheck
+        for backend in ("mmff94", "uff", "gfn1", "gfn2"):
+            assert f'"{backend}"' in selfcheck, f"{backend} is not enforced at build time"
+
+    def test_the_build_runs_the_self_check(self):
+        """An image that cannot do what it claims must not be produced."""
+        assert "selfcheck.py" in self.DEF.read_text()
+
+    def test_user_site_cannot_shadow_the_pinned_packages(self):
+        """apptainer binds $HOME, so a labmate's ~/.local would otherwise take
+        precedence over the versions this image was frozen with."""
+        text = self.DEF.read_text()
+        assert text.count("PYTHONNOUSERSITE=1") >= 2, (
+            "needs it during the build and at run time"
+        )
+
+    def test_libgomp_is_installed(self):
+        """tblite's wheel bundles gfortran and lapack but not the OpenMP
+        runtime, and without it GFN1/GFN2 fail at import with a message that
+        names no library."""
+        assert "libgomp1" in self.DEF.read_text()
+
+    def test_java_is_installed_for_opsin(self):
+        """py2opsin ships the jar but shells out to java, so the jar alone
+        would leave offline name lookup dead."""
+        assert "jre" in self.DEF.read_text()
