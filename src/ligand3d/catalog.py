@@ -314,7 +314,7 @@ def build_catalog() -> list[MethodInfo]:
 
         catalog.append(info)
 
-    order = {"ff": 0, "semiempirical": 1, "mlff": 2}
+    order = {"ff": 0, "semiempirical": 1, "mlff": 2, "dft": 3}
     catalog.sort(key=lambda m: (order.get(m.kind, 3), not m.ready, m.id))
     return catalog
 

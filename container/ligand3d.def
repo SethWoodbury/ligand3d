@@ -1,8 +1,13 @@
 Bootstrap: docker
 From: python:3.12-slim-trixie
 
+%arguments
+    # core | mace | fairchem. See the case statement in %post.
+    FAMILY=core
+
 %labels
     Name         ligand3d
+    Family       {{ FAMILY }}
     Description  2D molecule to minimized 3D structure
     Upstream     https://github.com/SethWoodbury/ligand3d
     Maintainer   Seth M. Woodbury
@@ -32,6 +37,9 @@ From: python:3.12-slim-trixie
 %post
     set -eux
 
+    family="{{ FAMILY }}"
+    echo "building the $family image"
+
     # apptainer bind-mounts $HOME during the build, so without this the
     # builder's ~/.local can shadow what is being installed here.
     export PYTHONNOUSERSITE=1
@@ -53,7 +61,24 @@ From: python:3.12-slim-trixie
     rm -rf /var/lib/apt/lists/*
 
     pip install --no-cache-dir --upgrade pip
-    pip install --no-cache-dir "/opt/ligand3d-src[xtb,protonation,names]"
+    # FAMILY selects which neural side, if any, this image carries.
+    # The split is not a choice: mace-torch pins e3nn==0.4.4 and fairchem-core
+    # needs e3nn>=0.5, so one environment can hold one of them. Everything
+    # else — tblite, protonation, name lookup, the sketcher — is in every
+    # image, so no backend chain can straddle a gap.
+    case "$family" in
+        core)     extras="xtb,protonation,names" ;;
+        mace)     extras="xtb,protonation,names,mace" ;;
+        fairchem) extras="xtb,protonation,names,fairchem" ;;
+        *) echo "unknown FAMILY: $family (use core, mace or fairchem)" >&2; exit 1 ;;
+    esac
+
+    if [ "$family" != core ]; then
+        # CPU torch unless someone asks otherwise. The CUDA build is several
+        # gigabytes larger and the GPU is reached through --nv at run time.
+        pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+    fi
+    pip install --no-cache-dir "/opt/ligand3d-src[$extras]"
 
     # The source was only needed to build the wheel; the installed package is
     # what runs. Leaving it would invite editing a copy that has no effect.

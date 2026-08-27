@@ -20,7 +20,7 @@ from rdkit import Chem
 
 from ..errors import BackendMismatch, BackendUnavailable
 
-BackendKind = Literal["ff", "semiempirical", "mlff"]
+BackendKind = Literal["ff", "semiempirical", "mlff", "dft"]
 
 # Elements covered by the organic-chemistry MLFFs, as trained.
 ORGANIC_ELEMENTS = frozenset({1, 6, 7, 8, 9, 15, 16, 17, 35, 53})
@@ -289,7 +289,7 @@ def load_builtin_backends() -> None:
     """
     from . import rdkit_ff  # noqa: F401  (registers mmff94, uff)
 
-    for module in ("xtb", "mlff"):
+    for module in ("xtb", "mlff", "dft"):
         try:
             __import__(f"{__package__}.{module}")
         except Exception:  # pragma: no cover - depends on optional deps

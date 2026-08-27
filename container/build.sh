@@ -18,6 +18,10 @@ set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$HERE/.." && pwd)"
 DEST="${1:-$ROOT/dist}"
+# Which images to build. Every one carries the full non-neural feature set;
+# they differ only in which neural family they can run, because mace-torch and
+# fairchem-core pin incompatible e3nn versions and cannot share an environment.
+FAMILIES="${LIGAND3D_FAMILIES:-core mace fairchem}"
 
 command -v apptainer >/dev/null || { echo "apptainer is not on PATH" >&2; exit 1; }
 
@@ -32,28 +36,40 @@ echo "building ligand3d $version from $commit$dirty"
 [[ -z $dirty ]] || echo "  warning: the working tree is dirty, so this image is not reproducible from git"
 
 mkdir -p "$DEST"
-image="$DEST/ligand3d-$version.sif"
 
 # --fakeroot, because building needs a writable root filesystem and this
-# machine has no subuid mapping. The build's %post runs a self-check and fails
+# machine has no subuid mapping. Each build's %post runs a self-check and fails
 # rather than producing an image that cannot do what it claims.
-apptainer build --fakeroot --force "$image" "$HERE/ligand3d.def"
+for family in $FAMILIES; do
+    echo
+    echo "=== $family ==="
+    if [ "$family" = core ]; then
+        out="$DEST/ligand3d-$version.sif"
+    else
+        out="$DEST/ligand3d-$family-$version.sif"
+    fi
+    apptainer build --fakeroot --force --build-arg "FAMILY=$family" "$out" "$HERE/ligand3d.def"
+    if [ "$family" = core ]; then
+        ln -sfn "$(basename "$out")" "$DEST/ligand3d.sif"
+    else
+        ln -sfn "$(basename "$out")" "$DEST/ligand3d-$family.sif"
+    fi
+done
 
 install -m 0755 "$HERE/ligand3d" "$DEST/ligand3d"
-ln -sfn "$(basename "$image")" "$DEST/ligand3d.sif"
 
 cat > "$DEST/VERSION" <<EOF
 ligand3d $version
 commit  $commit$dirty
 built   $(date -u +%Y-%m-%dT%H:%M:%SZ) by ${USER:-unknown}
-image   $(basename "$image")
+images  $(cd "$DEST" && ls ligand3d-*.sif | tr '\n' ' ')
 
 Use it by putting this directory on PATH:
     export PATH=$DEST:\$PATH
     ligand3d build "O=C1CN2CCC1CC2" -o quin.cif
 
-The launcher sends MACE and AIMNet2 to the quantum_chem image and
-eSEN/UMA/AllScAIP to the uma image, so those backends work here too.
+The launcher picks an image from the backend you ask for. Every image has the
+full non-neural feature set, so a chain like gfn2,mace-off runs in one place.
 --slurm needs sbatch and cannot run from a container; use a checkout for that.
 EOF
 

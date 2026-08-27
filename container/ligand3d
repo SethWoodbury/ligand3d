@@ -54,39 +54,55 @@ plugins cannot be reached from one. Submit from a checkout instead —
 Everything else here works unchanged."
 fi
 
-image="$CORE_SIF"
+# ligand3d builds one image per family, each carrying the *whole* non-neural
+# feature set — tblite, protonation, name lookup — so a chain like
+# `gfn2,mace-off` runs in one place. The lab's general-purpose images are a
+# fallback: they have the potentials but not the rest, so that same chain fails
+# in them partway through.
 family="core"
 case ",${backend}," in
-    *,esen*|*,uma-*|*,allscaip*)                image="$FAIRCHEM_SIF"; family="fairchem" ;;
-    *,mace*|*,aimnet2,*|*aimnet2)               image="$MACE_SIF";     family="mace" ;;
+    *,esen*|*,uma-*|*,allscaip*)  family="fairchem" ;;
+    *,mace*|*aimnet2*)            family="mace" ;;
 esac
 
-if [[ $family != core && ! -f $image ]]; then
-    die "backend '$backend' needs $image, which is not on this machine.
-Set LIGAND3D_SIF_MACE or LIGAND3D_SIF_FAIRCHEM, or choose a backend the core
-image covers: mmff94, uff, gfnff, gfn1, gfn2."
-fi
+own="$HERE/ligand3d-$family.sif"
+[[ $family == core ]] && own="$CORE_SIF"
 
-# --- binds ------------------------------------------------------------------
 binds=()
 for path in /home /net /mnt /projects /scratch; do
     [[ -d $path ]] && binds+=(--bind "$path:$path")
 done
-# Whatever directory the command was run from, so relative output paths land
-# where the user expects rather than inside the image.
 cwd="$(pwd -P)"
 case "$cwd" in /home/*|/net/*|/mnt/*|/projects/*|/scratch/*) ;; *) binds+=(--bind "$cwd:$cwd") ;; esac
 
-if [[ $family == core ]]; then
-    # Tells `doctor` it is inside the launcher, so it explains that the neural
-    # potentials are dispatched elsewhere rather than telling someone to pip
-    # install torch into a read-only image.
-    exec apptainer run "${binds[@]}" --pwd "$cwd" --env LIGAND3D_LAUNCHER=1 "$image" "$@"
+nv=()
+[[ $family != core ]] && command -v nvidia-smi >/dev/null 2>&1 && nv=(--nv)
+
+if [[ -f $own ]]; then
+    # ligand3d is installed in this image, so nothing needs to be carried in.
+    exec apptainer run "${nv[@]}" "${binds[@]}" --pwd "$cwd" \
+        --env LIGAND3D_LAUNCHER=1 \
+        --env "HF_HOME=${HF_HOME:-/net/databases/huggingface}" \
+        --env TORCHDYNAMO_DISABLE=1 \
+        "$own" "$@"
 fi
 
-# --- dispatching to an image that has no ligand3d in it ---------------------
-# Copy the package out of the core sif once, keyed by that image's identity, so
-# a rebuilt image gets a fresh copy and a stale one is never reused.
+# --- fallback: a lab image that has the potentials but not ligand3d ---------
+image=""
+case "$family" in
+    mace)     image="$MACE_SIF" ;;
+    fairchem) image="$FAIRCHEM_SIF" ;;
+esac
+[[ -n $image && -f $image ]] || die "backend '$backend' needs $own or a lab image,
+and neither is here. Build one with container/build.sh, or choose a backend the
+core image covers: mmff94, uff, gfnff, gfn1, gfn2, orca."
+
+printf 'ligand3d: no %s, falling back to %s\n' "$(basename "$own")" "$(basename "$image")" >&2
+printf '          that image lacks tblite and dimorphite-dl, so GFN1/GFN2 and pH\n' >&2
+printf '          protonation are unavailable in it. Build the family image to fix.\n' >&2
+
+# Copy the package out of the core sif, keyed by that image's identity, so a
+# rebuilt image gets a fresh copy and a stale one is never reused.
 stamp="$(stat -c '%Y-%s' "$CORE_SIF")"
 payload="$CACHE/$stamp"
 if [[ ! -d $payload/ligand3d ]]; then
@@ -97,9 +113,6 @@ if [[ ! -d $payload/ligand3d ]]; then
         cp -r "$src" /out/
     ' || die "could not take the package out of $CORE_SIF"
 fi
-
-nv=()
-[[ $family != core ]] && command -v nvidia-smi >/dev/null 2>&1 && nv=(--nv)
 
 exec apptainer exec "${nv[@]}" "${binds[@]}" --bind "$payload:$payload" --pwd "$cwd" \
     --env "PYTHONPATH=$payload" \

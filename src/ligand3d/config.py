@@ -259,6 +259,11 @@ _CREST_PROBE = [
     Path("/home/woodbuse/conda/envs/qcb-xtb/bin/crest"),
     CACHE_DIR / "crest" / "bin" / "crest",
 ]
+_ORCA_PROBE = [
+    Path("/net/software/orca/latest/orca"),
+    Path("/software/orca/latest/orca"),
+    CACHE_DIR / "orca" / "orca",
+]
 _XTB_LIB_PROBE = [
     Path("/home/woodbuse/conda/envs/qcb-xtb/lib"),
 ]
@@ -354,8 +359,14 @@ def find_model_weights(key: str) -> Path | None:
     return resolve_weights(key).path
 
 
-def resolve_binary(name: str, probes: list[Path]) -> Resolution:
-    """Locate an external executable."""
+def resolve_binary(name: str, probes: list[Path], validate=None) -> Resolution:
+    """Locate an external executable.
+
+    `validate` rejects a candidate that has the right name and is the wrong
+    program, which is not hypothetical: `orca` on PATH here is the GNOME screen
+    reader, and running a geometry through it would fail in a way that mentions
+    neither chemistry nor accessibility.
+    """
     res = Resolution(key=name)
 
     env_name = _env_key(f"{name}_bin")
@@ -363,7 +374,7 @@ def resolve_binary(name: str, probes: list[Path]) -> Resolution:
     env = os.environ.get(env_name)
     if env:
         p = Path(env).expanduser()
-        if p.exists() and os.access(p, os.X_OK):
+        if p.exists() and os.access(p, os.X_OK) and (validate is None or validate(p)):
             res.path, res.via = p, f"${env_name}"
             return res
 
@@ -371,19 +382,20 @@ def resolve_binary(name: str, probes: list[Path]) -> Resolution:
     res.tried.append(f"{CONFIG_PATH}:[binaries].{name}")
     if name in cfg:
         p = Path(str(cfg[name])).expanduser()
-        if p.exists() and os.access(p, os.X_OK):
+        if p.exists() and os.access(p, os.X_OK) and (validate is None or validate(p)):
             res.path, res.via = p, "config.toml"
             return res
 
     res.tried.append("$PATH")
     on_path = shutil.which(name)
-    if on_path:
+    if on_path and (validate is None or validate(Path(on_path))):
         res.path, res.via = Path(on_path), "PATH"
         return res
 
     for candidate in probes:
         res.tried.append(str(candidate))
-        if candidate.exists() and os.access(candidate, os.X_OK):
+        if (candidate.exists() and os.access(candidate, os.X_OK)
+                and (validate is None or validate(candidate))):
             res.path, res.via = candidate, "probe"
             return res
     return res
@@ -440,6 +452,34 @@ def resolve_xtb() -> Resolution:
 
 def resolve_crest() -> Resolution:
     return resolve_binary("crest", _CREST_PROBE)
+
+
+def _is_quantum_orca(path: Path) -> bool:
+    """True if this `orca` is the quantum chemistry program.
+
+    GNOME ships a screen reader by the same name, and on this cluster it is the
+    one on PATH. Telling them apart by execution means launching a screen
+    reader; the quantum program instead ships a family of sibling executables,
+    and a 13 KB Python script is not a compiled SCF driver.
+    """
+    try:
+        if path.is_symlink():
+            path = path.resolve()
+        if path.stat().st_size < 1_000_000:
+            return False
+        return any((path.parent / sibling).exists()
+                   for sibling in ("orca_scf", "orca_gtoint", "orca_scfgrad"))
+    except OSError:
+        return False
+
+
+def resolve_orca() -> Resolution:
+    return resolve_binary("orca", _ORCA_PROBE, validate=_is_quantum_orca)
+
+
+def find_orca_binary() -> str | None:
+    resolution = resolve_orca()
+    return str(resolution.path) if resolution.path else None
 
 
 def find_xtb_binary() -> str | None:

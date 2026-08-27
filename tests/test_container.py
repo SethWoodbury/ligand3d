@@ -266,3 +266,64 @@ class TestTheLauncher:
         """py2opsin ships the jar but shells out to java, so the jar alone
         would leave offline name lookup dead."""
         assert "jre" in self.DEF.read_text()
+
+
+class TestTheImageFamilies:
+    """One image per dependency conflict, not one per method.
+
+    The split has exactly one cause: mace-torch pins e3nn==0.4.4 and
+    fairchem-core needs e3nn>=0.5. That is two groups, so there are two neural
+    images plus a core one — not one per backend, which would duplicate torch
+    for no benefit.
+
+    What each image must carry is the *whole* non-neural feature set. Dispatching
+    a chain like `gfn2,mace-off` into an image with MACE but no tblite fails
+    partway through, which is exactly what happened when the launcher borrowed
+    the lab's general-purpose images.
+    """
+
+    DEF = Path(__file__).resolve().parents[1] / "container" / "ligand3d.def"
+    LAUNCHER = Path(__file__).resolve().parents[1] / "container" / "ligand3d"
+    BUILD = Path(__file__).resolve().parents[1] / "container" / "build.sh"
+
+    def test_the_definition_takes_a_family(self):
+        text = self.DEF.read_text()
+        assert "%arguments" in text and "FAMILY" in text
+        for family in ("core", "mace", "fairchem"):
+            assert f"{family})" in text, f"{family} is not a buildable family"
+
+    def test_every_family_gets_the_non_neural_extras(self):
+        """This is the property that makes a cross-tier chain work."""
+        import re
+
+        text = self.DEF.read_text()
+        for line in re.findall(r'^\s+(core|mace|fairchem)\)\s+extras="([^"]+)"', text, re.M):
+            family, extras = line
+            for needed in ("xtb", "protonation", "names"):
+                assert needed in extras, f"{family} is missing {needed}"
+
+    def test_only_one_neural_family_per_image(self):
+        """Both in one image is the conflict, not a configuration."""
+        import re
+
+        text = self.DEF.read_text()
+        for family, extras in re.findall(
+            r'^\s+(core|mace|fairchem)\)\s+extras="([^"]+)"', text, re.M
+        ):
+            assert not ("mace" in extras and "fairchem" in extras), family
+
+    def test_the_launcher_prefers_our_own_image(self):
+        """The lab images lack tblite and dimorphite-dl, so they are a fallback
+        rather than the plan."""
+        text = self.LAUNCHER.read_text()
+        assert 'ligand3d-$family.sif' in text
+        assert "falling back" in text, "no warning when the fallback is used"
+
+    def test_the_fallback_says_what_is_lost(self):
+        text = self.LAUNCHER.read_text()
+        assert "tblite" in text and "dimorphite" in text
+
+    def test_the_build_script_builds_every_family(self):
+        text = self.BUILD.read_text()
+        assert "FAMILIES" in text
+        assert "--build-arg" in text

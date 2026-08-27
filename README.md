@@ -102,25 +102,32 @@ a real end-to-end build. That check has already earned itself twice: once on a m
 `libgomp1`, which made GFN1/GFN2 fail at import with a message naming no library, and once
 on `xtb` being absent so GFN-FF was silently unavailable.
 
-### What is in the image, and what the launcher does
+### Why there are three images, and not one or twenty
 
-The image is **394 MB** and covers MMFF94, UFF, GFN-FF, GFN1, GFN2, pH protonation,
-offline IUPAC name lookup, conformer search, the sketcher, Rosetta params and the
-annotated CIF. It deliberately has no torch — that alone is several gigabytes, and the
-MACE and fairchem sides cannot share an environment anyway.
+**One image per dependency conflict.** There is exactly one: `mace-torch` pins
+`e3nn==0.4.4` and `fairchem-core` needs `e3nn>=0.5`. That is two groups, so:
 
-The neural potentials still work. The launcher reads the backend you asked for and picks
-the image:
+| image | size | neural family |
+|---|---|---|
+| `ligand3d.sif` | 394 MB | none |
+| `ligand3d-mace.sif` | 770 MB | MACE, MACE-POLAR, AIMNet2 |
+| `ligand3d-fairchem.sif` | ~800 MB | eSEN, UMA, AllScAIP |
 
-| backend | runs in |
-|---|---|
-| `mmff94`, `uff`, `gfnff`, `gfn1`, `gfn2` | `ligand3d.sif` |
-| `mace-*`, `aimnet2` | the lab's `quantum_chem` image |
-| `esen*`, `uma-*`, `allscaip*` | the lab's `uma` image |
+A container per *method* would be the wrong shape: all the MACE variants share one
+environment happily, and torch is most of the size, so twenty images would mean twenty
+copies of torch to solve a problem that has two sides.
 
-For those, the package is copied **out of `ligand3d.sif` itself** into a cache keyed by
-that image's identity, so the code running against MACE is exactly the code that was
-released, and a rebuilt image never reuses a stale copy.
+**Every image carries the full non-neural feature set** — tblite, protonation, name
+lookup, the sketcher, params, the annotated CIF. That is the property that matters, and
+it is what the earlier arrangement got wrong: borrowing the lab's general-purpose
+`quantum_chem` image gave you MACE but no tblite, so `-b gfn2,mace-off` failed partway
+through with an error telling you to pip install into a read-only container. Now the whole
+chain runs in one place.
+
+The launcher reads the backend and picks the image. If a family image is missing it falls
+back to the lab's, warns, and says what is unavailable in it.
+
+`container/build.sh` builds all three; `LIGAND3D_FAMILIES="core mace"` builds a subset.
 
 Two things do not work from a container, and the launcher says so rather than failing
 obscurely:
@@ -150,6 +157,7 @@ uv venv && uv pip install -e ".[xtb,protonation,names]"
 | `gfn2` | semi-empirical | yes | ALPB | 0.33 s |
 | `gfn1` | semi-empirical | yes | ALPB | 0.57 s |
 | ML potentials | see below | varies | no | 0.5 s to a minute |
+| `orca` | DFT | yes (+ spin) | CPCM | 25 s for methanol, and it climbs steeply |
 
 Chain them with a comma — cheap first, expensive last:
 
@@ -178,6 +186,81 @@ ligand3d build "<smiles>" --backend mmff94,mace-mh,mace-off-large
 
 The first method searches the conformers and the rest refine only the survivors, so put
 the cheap one first.
+
+## Adding a method
+
+A backend declares what it can do and implements one function. The pipeline
+reads the declaration and routes around it — the charge-channel refusal, the
+zwitterion solvation check, the element check and the chaining all come from
+`Capabilities` rather than from anything the backend does.
+
+```python
+class MyBackend(ASEBackend):
+    caps = Capabilities(
+        name="mymethod", kind="mlff",
+        takes_charge=True, supports_solvation=False,
+        fixed_topology=False, energy_kind="total",
+        requires=("mypackage",),
+    )
+
+    def make_calculator(self, job):
+        import mypackage
+        return mypackage.ASECalculator(charge=job.charge)
+
+register("mymethod", MyBackend)
+```
+
+That is the whole contract for anything with an ASE calculator, which is most
+things. **DFT was added this way as the test of it**: one new module, plus three
+one-line edits — adding `"dft"` to a `Literal`, to a module list, and to a sort
+order. Charge, spin, solvent and chaining needed no work at all.
+
+A new *checkpoint* for an existing family is smaller still: one `ModelSpec` in
+`config.py` naming the file and what it was trained on. A new **classical**
+method that is not ASE-shaped implements `minimize()` directly instead —
+`rdkit_ff.py` and the GFN-FF path in `xtb.py` both do, because they optimise
+internally rather than returning gradients.
+
+Two things a new method should get right, because they are what the rest of the
+tool reasons about:
+
+- **`takes_charge`** decides whether a charged molecule is allowed near it. Get
+  this wrong and a carboxylate is silently treated as a neutral acid.
+- **`fixed_topology`** decides whether implicit solvation is forced for a
+  zwitterion. A method that works from positions alone will happily move a
+  proton and collapse one.
+
+## DFT
+
+```bash
+ligand3d build "<smiles>" -b mmff94,gfn2,orca -o thing.cif
+LIGAND3D_ORCA_METHOD=PBE0 LIGAND3D_ORCA_BASIS=def2-TZVP ligand3d build ... -b orca
+```
+
+ORCA, defaulting to **B97-3c** — a composite method built for geometries, which
+is what you want when the alternative is minutes per gradient. `LIGAND3D_ORCA_METHOD`
+and `LIGAND3D_ORCA_BASIS` override it; leave the basis empty for the other
+composites (`HF-3c`, `PBEh-3c`, `r2SCAN-3c`, the last needing ORCA 5).
+
+ligand3d drives the optimiser itself and asks ORCA only for gradients
+(`ENGRAD`), so DFT produces the same trace and obeys the same convergence
+criterion as every other backend rather than being a special case.
+
+The sensible use is the last link in a chain: search with MMFF94, narrow with
+GFN2, spend DFT only on what survives.
+
+On water, against experiment (0.958 Å, 104.5°):
+
+| | O–H | H–O–H |
+|---|---|---|
+| `mmff94` | 0.969 Å | 104.0° |
+| `gfn2` | 0.958 Å | 107.2° |
+| `orca` (B97-3c) | 0.963 Å | 103.8° |
+
+**A trap worth knowing about:** `orca` on PATH at the IPD is the *GNOME screen
+reader*, not the quantum chemistry program. Resolution checks that the binary it
+found is actually ORCA — a 13 KB Python script with no `orca_scf` beside it is
+not an SCF driver — and finds the real one at `/net/software/orca/latest/orca`.
 
 ## Implicit solvent
 
