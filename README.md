@@ -111,7 +111,7 @@ on `xtb` being absent so GFN-FF was silently unavailable.
 |---|---|---|
 | `ligand3d.sif` | 394 MB | none |
 | `ligand3d-mace.sif` | 770 MB | MACE, MACE-POLAR, AIMNet2 |
-| `ligand3d-fairchem.sif` | ~800 MB | eSEN, UMA, AllScAIP |
+| `ligand3d-fairchem.sif` | 1.1 GB | eSEN, UMA, AllScAIP |
 
 A container per *method* would be the wrong shape: all the MACE variants share one
 environment happily, and torch is most of the size, so twenty images would mean twenty
