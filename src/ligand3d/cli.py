@@ -723,7 +723,8 @@ def doctor() -> None:
         ("dimorphite_dl", "pH-based protonation"),
         ("torch", "machine-learned potentials"),
         ("mace", "MACE potentials"),
-        ("graph_longrange", "MACE-POLAR long-range electrostatics"),
+        ("graph_longrange", "MACE-POLAR long-range electrostatics (pip install "
+         "git+https://github.com/WillBaldwin0/graph_electrostatics.git@v0.4.0)"),
         ("aimnet", "AIMNet2 potential"),
         ("py2opsin", "offline IUPAC name lookup for 'fetch'"),
     ):

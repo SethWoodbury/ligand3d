@@ -77,6 +77,9 @@ def main() -> int:
     if family in FAMILY_MODULES:
         module = FAMILY_MODULES[family]
         check(f"import {module} (the {family} image's reason to exist)", _importable(module))
+    if family == "mace":
+        # Without this the MACE-POLAR checkpoints cannot be unpickled at all.
+        check("import graph_longrange (MACE-POLAR)", _importable("graph_longrange"))
 
     # The one that matters: a real build, end to end.
     result = subprocess.run(

@@ -139,7 +139,7 @@ class TestMacePolar:
         if path is None:
             pytest.skip("POLAR weights not present here")
         assert path.name == "MACE-POLAR-1-M.model"
-        assert "mace-polar-1-beta" in str(path)
+        assert "mace-polar-1" in str(path)
 
 
 class TestModelMetadata:
@@ -367,3 +367,27 @@ class TestTheReadmeMatchesTheCode:
     def test_the_intro_does_not_claim_pdb_is_the_default(self):
         head = self.README.read_text()[:1200]
         assert "mmCIF by default" in head
+
+
+def test_polar_models_have_a_charge_channel():
+    """MACE-POLAR reads atoms.info['charge'] — measured, not assumed.
+
+    Setting a charge on ethanol moves the MACE-POLAR-1-M energy by +1.41 eV
+    (-1) and +11.71 eV (+1), while mace-mh under the same test does not move
+    at all. Flagging it False made ligand3d refuse carboxylates and
+    zwitterions on the one MACE model built for exactly that case.
+    """
+    from ligand3d.config import MODELS
+
+    polar = [m for m in MODELS if m.family == "mace-polar"]
+    assert polar, "the polar models went missing"
+    assert all(m.takes_charge for m in polar)
+
+
+def test_polar_weights_live_in_the_released_directory():
+    """The checkpoints are the public release, not the old -beta staging dir."""
+    from ligand3d.config import MODELS
+
+    for spec in (m for m in MODELS if m.family == "mace-polar"):
+        assert "mace-polar-1-beta" not in str(spec.patterns)
+        assert spec.repo == "ACEsuit/mace-polar-1"

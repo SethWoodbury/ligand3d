@@ -209,7 +209,7 @@ _DATASET_ACCURACY: dict[str, tuple[str, str]] = {
     ),
     "polar": (
         "a polarizable dataset carrying explicit long-range electrostatics",
-        "beta release, and no settled benchmark to quote. Its reason to exist "
+        "no settled benchmark to quote yet. Its reason to exist "
         "is the physics the others drop: MACE and friends truncate at a cutoff, "
         "so a charged or strongly polar group stops being felt a few angstroms "
         "away. POLAR keeps that term, which matters for zwitterions and salt "

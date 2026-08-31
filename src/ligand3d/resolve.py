@@ -30,6 +30,8 @@ that is what the other two routes are for.
 
 from __future__ import annotations
 
+import pathlib
+
 import json
 import re
 import urllib.error
@@ -207,6 +209,7 @@ def from_opsin(name: str) -> Resolved | None:
     """
     if not opsin_available():
         return None
+    import tempfile
     import warnings
 
     from py2opsin import py2opsin
@@ -216,7 +219,15 @@ def from_opsin(name: str) -> Resolved | None:
             # An unparsable name is a normal outcome here, not something to
             # print at whoever is typing.
             warnings.simplefilter("ignore")
-            smiles = py2opsin(name)
+            # py2opsin writes its input file to a *fixed* name relative to the
+            # working directory. Left alone that drops a file into whatever
+            # directory someone happened to run `fetch` from, and two lookups
+            # running at once collide on the same name. A private directory
+            # per call fixes both.
+            with tempfile.TemporaryDirectory(prefix="ligand3d-opsin-") as scratch:
+                smiles = py2opsin(
+                    name, tmp_fpath=str(pathlib.Path(scratch) / "input.txt")
+                )
     except Exception:  # a missing jar, a broken java, anything
         return None
     if not smiles:

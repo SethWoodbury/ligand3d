@@ -80,6 +80,16 @@ From: python:3.12-slim-trixie
     fi
     pip install --no-cache-dir "/opt/ligand3d-src[$extras]"
 
+    # MACE-POLAR-1's checkpoints reference graph_longrange when torch unpickles
+    # them, but mace-torch only soft-imports it and does not depend on it, so
+    # pip alone leaves the model unloadable. It ships in graph_electrostatics,
+    # which is MIT but not on PyPI under any spelling — the tarball avoids
+    # needing git in the image. Pinned to the version the MACE docs name.
+    if [ "$family" = mace ]; then
+        pip install --no-cache-dir \
+            https://github.com/WillBaldwin0/graph_electrostatics/archive/refs/tags/v0.4.0.tar.gz
+    fi
+
     # The source was only needed to build the wheel; the installed package is
     # what runs. Leaving it would invite editing a copy that has no effect.
     rm -rf /opt/ligand3d-src

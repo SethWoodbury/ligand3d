@@ -321,7 +321,7 @@ which is why they are the wrong tool for a zwitterion regardless of charge handl
 
 **At the IPD, nothing needs configuring.** The checkpoints are already on
 `/net/databases/huggingface/mlFF_models/`, which is one of the built-in probe locations,
-so `mace-polar` resolves to `models--ACEsuit--mace-polar-1-beta/MACE-POLAR-1-M.model`
+so `mace-polar` resolves to `models--ACEsuit--mace-polar-1/MACE-POLAR-1-M.model`
 without being told. `ligand3d models -v` prints the resolved path for every model, and
 `ligand3d doctor` shows every location it looked in, so a miss is diagnosable rather than
 mysterious. That store has its own `README.md` recording who added what and from where —
@@ -355,10 +355,12 @@ convention*, not evidence of a HuggingFace repo:
 
 Two warnings that are not about convenience:
 
-- **MACE-POLAR is beta and not public.** It is early access to the model from
-  arXiv 2602.19411v1, the authors are not the Baker Lab, and the store's README says to
-  keep the checkpoints within the lab. The `-beta` in the directory name flags exactly
-  this. Do not redistribute it, and do not expect to download it.
+- **MACE-POLAR-1 is public, but academic-use only.** Released 2026-02-23 through
+  [GitHub](https://github.com/ACEsuit/mace-foundations/releases/tag/mace_polar_1) — not
+  Hugging Face, so `huggingface-cli` will not find it. The authors are not the Baker Lab.
+  The weights are under [ASL](https://github.com/gabor1/ASL), which is *not* an
+  open-source licence: GPLv2-derived with a non-commercial clause. Fine for research;
+  commercial use needs the licensor.
 - **`uma-s-1` is archived upstream over an extensivity bug.** ligand3d does not carry that
   alias, and neither should you — `uma-s` is 1.1.
 
@@ -459,16 +461,23 @@ mutually exclusive environment. **That is no longer true:** `mace-torch` 0.3.16 
 virtualenv.
 
 One piece is still missing from PyPI — `graph_longrange`, which supplies the
-reciprocal-space sum. On this cluster the source is in `quantum_cowboy_biochemistry/deps/`:
+reciprocal-space sum. `mace-torch` only *soft*-imports it, so pip alone leaves you with a
+checkpoint that cannot be unpickled: the dependency is recorded inside the model file, and
+`torch.load` resolves it at `find_class` time. It ships in `graph_electrostatics`, MIT,
+GitHub-only:
 
 ```bash
-uv pip install --no-deps <repo>/deps/graph_longrange_src
+uv pip install --no-deps git+https://github.com/WillBaldwin0/graph_electrostatics.git@v0.4.0
 ligand3d build "<smiles>" --backend mmff94,mace-polar
 ```
 
 `--no-deps` is deliberate: its requirements (`torch`, `e3nn==0.4.4`, `numpy`, `ase`) are
 already satisfied by the `[mace]` extra, and letting it re-resolve them risks moving the
 e3nn pin that the whole MACE side depends on.
+
+The `ligand3d-mace.sif` container has it baked in, so POLAR works there with nothing to
+install. It is deliberately absent from the fairchem image: `graph_electrostatics` pins
+`e3nn==0.4.4`, the same pin that splits the two families in the first place.
 
 `ligand3d doctor` reports `graph_longrange` on its own line, so a missing POLAR is one
 lookup rather than a puzzle.
@@ -670,7 +679,7 @@ kcal/mol for some of the chemistry you will point this at. "1 kcal/mol against D
 | `mace-off*` | ωB97M-D3(BJ)/def2-TZVPPD (SPICE) | ~1 kcal/mol energies, ~1–2 kcal/mol/Å forces, neutral organics |
 | `mace-omol`, `esen`, `uma*` | ωB97M-V/def2-TZVPD (OMol25) | sub-kcal/mol in domain; covers charged and open-shell |
 | `mace-mp` | PBE / r2SCAN periodic DFT | tens of meV/Å on solids; **not fitted for molecular conformers** |
-| `mace-polar*` | a polarizable set with explicit long-range terms | beta; no settled benchmark to quote |
+| `mace-polar*` | a polarizable set with explicit long-range terms | no settled benchmark to quote; charge-aware |
 
 **Every one of those figures is in-domain.** They are errors on held-out data drawn from the
 same distribution as the training set. That is what papers report and it is the number most
