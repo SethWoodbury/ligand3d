@@ -85,7 +85,7 @@ From: python:3.12-slim-trixie
     rm -rf /opt/ligand3d-src
 
     # Fail the build rather than ship an image that cannot do what it claims.
-    python /opt/selfcheck.py
+    LIGAND3D_FAMILY="$family" python /opt/selfcheck.py
     rm -f /opt/selfcheck.py
 
 %files

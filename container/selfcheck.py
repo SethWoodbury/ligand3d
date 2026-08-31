@@ -10,6 +10,7 @@ which is how you check a machine has the pieces before blaming the tool.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,15 @@ REQUIRED_BACKENDS = ("mmff94", "uff", "gfn1", "gfn2")
 #: GFN-FF runs through the standalone xtb binary rather than tblite, so it
 #: is reported but not required — an image without it is still useful.
 OPTIONAL_BACKENDS = ("gfnff",)
+
+#: The one thing that differs between the images. Without this the check is
+#: family-blind: a mace image whose torch stack failed to resolve passes every
+#: other line here and ships with nine backends that cannot load.
+#:
+#: The *import* is what gets checked, not `available()`. Weights live on /net
+#: and nothing is bound during a build, so availability would report false for
+#: an image that is in fact fine.
+FAMILY_MODULES = {"mace": "mace", "fairchem": "fairchem"}
 
 
 def main() -> int:
@@ -62,6 +72,11 @@ def main() -> int:
                   f"(optional){'' if availability else ' — ' + availability.reason}")
     except Exception as exc:  # pragma: no cover
         check("backends importable", False, str(exc))
+
+    family = os.environ.get("LIGAND3D_FAMILY", "core")
+    if family in FAMILY_MODULES:
+        module = FAMILY_MODULES[family]
+        check(f"import {module} (the {family} image's reason to exist)", _importable(module))
 
     # The one that matters: a real build, end to end.
     result = subprocess.run(
