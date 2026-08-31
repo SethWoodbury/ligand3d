@@ -18,6 +18,7 @@ from __future__ import annotations
 import http.server
 import io
 import json
+import os
 import shutil
 import socket
 import socketserver
@@ -509,10 +510,22 @@ def serve(
         print(f"ligand3d sketcher ({label}) running at {url}")
         print("draw, set the options, and press Build. Ctrl-C to stop.")
     if open_browser:
+        # `webbrowser.open` returns False rather than raising when there is
+        # nothing to open — which is the normal case in a container and over
+        # SSH. Saying so beats printing a URL and letting someone wait for a
+        # window that is never coming.
+        opened = False
         try:
-            webbrowser.open(url)
+            opened = webbrowser.open(url)
         except Exception:
-            pass
+            opened = False
+        if not opened and not quiet:
+            print("  no browser to open here — open that URL yourself.")
+            if os.environ.get("SSH_CONNECTION"):
+                print(
+                    f"  over SSH, forward it first:  "
+                    f"ssh -N -L {port}:127.0.0.1:{port} {os.uname().nodename}"
+                )
 
     if block:
         try:

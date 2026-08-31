@@ -84,6 +84,27 @@ ligand3d fetch "3-Cyano-7-ethoxycoumarin"
 ligand3d sketch
 ```
 
+### Opening the sketcher
+
+`ligand3d sketch` works through the launcher with nothing installed. It prints a URL;
+open that.
+
+Bare `sketch` starts in the **richest image available**, not the core one — the backend is
+chosen in the browser, after the image has already been picked, so landing in core would
+offer a menu of five. With the MACE image present you get fifteen. `sketch -b esen` starts
+on the fairchem side instead.
+
+**Over SSH, forward the port first.** The server binds `127.0.0.1` and never listens on an
+external interface, so a browser on your laptop reaches it through the tunnel:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 <cluster>     # in one terminal
+ligand3d sketch --port 8080                  # in another, on the cluster
+```
+
+Then open `http://127.0.0.1:8080/` locally. No browser opens by itself in a container or
+over SSH, and the command says so rather than leaving you waiting for a window.
+
 Nothing is installed, nothing is cloned, and no venv is created. **The source is baked
 into the image**, so a run is pinned to a released version rather than to whatever happens
 to be checked out — a colleague's results cannot change because you were mid-edit. The

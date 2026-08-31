@@ -38,7 +38,9 @@ command -v apptainer >/dev/null || die "apptainer is not on PATH; this launcher 
 # heavier image.
 backend=""
 wants_slurm=0
+subcommand=""
 for ((i = 1; i <= $#; i++)); do
+    case "${!i}" in -*) ;; *) [[ -z $subcommand ]] && subcommand="${!i}" ;; esac
     case "${!i}" in
         -b|--backend) j=$((i + 1)); [[ $j -le $# ]] && backend="${!j}" ;;
         --backend=*)  backend="${!i#--backend=}" ;;
@@ -64,6 +66,17 @@ case ",${backend}," in
     *,esen*|*,uma-*|*,allscaip*)  family="fairchem" ;;
     *,mace*|*aimnet2*)            family="mace" ;;
 esac
+
+# The sketcher is the one command where the backend is chosen *after* the
+# image is: you pick it in the browser. Landing in the core image would offer a
+# menu of five, so it starts in the richest one available unless told
+# otherwise. MACE is the default of the two neural families because it carries
+# the most models; `sketch -b esen` gets the other side.
+if [[ $subcommand == sketch && -z $backend ]]; then
+    for candidate in mace fairchem; do
+        [[ -f $HERE/ligand3d-$candidate.sif ]] && { family="$candidate"; break; }
+    done
+fi
 
 own="$HERE/ligand3d-$family.sif"
 [[ $family == core ]] && own="$CORE_SIF"
