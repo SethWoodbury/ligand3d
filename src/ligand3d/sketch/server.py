@@ -445,10 +445,45 @@ class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 
+#: Tried in order before falling back to whatever the OS hands out. The point
+#: is a *stable* port: over SSH you have to forward the port before you can
+#: reach the page, so a number that is the same tomorrow means the same tunnel
+#: works tomorrow. A random one means setting the tunnel up again every time.
+#: The run is still tied to 127.0.0.1, so this shares nothing with the network.
+PREFERRED_PORTS = (8765, 8766, 8767, 8768, 8769)
+
+
 def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+    for candidate in PREFERRED_PORTS:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            # SO_REUSEADDR, because `_Server` sets it too. Without it a port
+            # left in TIME_WAIT by the previous Ctrl-C probes as busy and we
+            # skip to the next number — losing the stable port in exactly the
+            # case it matters most, restarting the sketcher.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", candidate))
+            except OSError:
+                continue  # someone else's sketcher, or anything else, has it
+            return candidate
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _ssh_hint(port: int) -> str | None:
+    """The tunnel command to run, if this looks like a remote session.
+
+    The server binds 127.0.0.1 and nothing else, so a browser elsewhere can
+    only reach it through a forward. Prefer the FQDN: the bare nodename is
+    usually not resolvable from a laptop.
+    """
+    if not os.environ.get("SSH_CONNECTION"):
+        return None
+    host = socket.getfqdn()
+    if "." not in host:
+        host = os.uname().nodename
+    return f"ssh -N -L {port}:127.0.0.1:{port} {host}"
 
 
 def _warm_catalog() -> None:
@@ -509,23 +544,24 @@ def serve(
         label = engine.name if engine else "paste box"
         print(f"ligand3d sketcher ({label}) running at {url}")
         print("draw, set the options, and press Build. Ctrl-C to stop.")
+    # `webbrowser.open` returns False rather than raising when there is nothing
+    # to open — the normal case in a container and over SSH. Saying so beats
+    # printing a URL and letting someone wait for a window that never comes.
+    opened = False
     if open_browser:
-        # `webbrowser.open` returns False rather than raising when there is
-        # nothing to open — which is the normal case in a container and over
-        # SSH. Saying so beats printing a URL and letting someone wait for a
-        # window that is never coming.
-        opened = False
         try:
             opened = webbrowser.open(url)
         except Exception:
             opened = False
-        if not opened and not quiet:
+    if not quiet and not opened:
+        hint = _ssh_hint(port)
+        if hint:
+            # Said whether or not a browser was attempted: on a remote node the
+            # URL alone is unreachable, and that is worth one line either way.
+            print(f"  to reach it from your machine, run this locally first:\n    {hint}")
+            print(f"  then open {url} there.")
+        elif open_browser:
             print("  no browser to open here — open that URL yourself.")
-            if os.environ.get("SSH_CONNECTION"):
-                print(
-                    f"  over SSH, forward it first:  "
-                    f"ssh -N -L {port}:127.0.0.1:{port} {os.uname().nodename}"
-                )
 
     if block:
         try:

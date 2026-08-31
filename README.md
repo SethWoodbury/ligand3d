@@ -94,16 +94,17 @@ chosen in the browser, after the image has already been picked, so landing in co
 offer a menu of five. With the MACE image present you get fifteen. `sketch -b esen` starts
 on the fairchem side instead.
 
-**Over SSH, forward the port first.** The server binds `127.0.0.1` and never listens on an
-external interface, so a browser on your laptop reaches it through the tunnel:
+**Over SSH, forward the port.** The server binds `127.0.0.1` and never listens on an
+external interface, so a browser on your laptop reaches it only through a tunnel. The port
+is stable — 8765 unless something already has it — so the same tunnel works every session:
 
 ```bash
-ssh -N -L 8080:127.0.0.1:8080 <cluster>     # in one terminal
-ligand3d sketch --port 8080                  # in another, on the cluster
+ligand3d sketch                              # on the cluster node
+ssh -N -L 8765:127.0.0.1:8765 <that node>    # on your laptop, in another terminal
 ```
 
-Then open `http://127.0.0.1:8080/` locally. No browser opens by itself in a container or
-over SSH, and the command says so rather than leaving you waiting for a window.
+Then open `http://127.0.0.1:8765/` on the laptop. `sketch` prints that exact command,
+with the node's real hostname filled in, whenever it can't open a browser itself.
 
 Nothing is installed, nothing is cloned, and no venv is created. **The source is baked
 into the image**, so a run is pinned to a released version rather than to whatever happens

@@ -660,3 +660,42 @@ class TestWhereABuildRuns:
         data = _get(base, "/api/backends")
         assert set(data["container"]) == {"available", "images"}
         assert all("in_container" in b for b in data["backends"])
+
+def test_free_port_prefers_a_stable_number(monkeypatch):
+    """A random port means re-making the SSH tunnel every session."""
+    import socket as socket_module
+
+    from ligand3d.sketch import server
+
+    with socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        known_free = probe.getsockname()[1]
+
+    monkeypatch.setattr(server, "PREFERRED_PORTS", (known_free,))
+    assert server._free_port() == known_free
+
+
+def test_free_port_falls_through_when_the_preferred_one_is_taken(monkeypatch):
+    import socket as socket_module
+
+    from ligand3d.sketch import server
+
+    with socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM) as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen(1)
+        taken = held.getsockname()[1]
+        monkeypatch.setattr(server, "PREFERRED_PORTS", (taken,))
+        assert server._free_port() != taken
+
+
+def test_ssh_hint_only_appears_in_a_remote_session(monkeypatch):
+    from ligand3d.sketch.server import _ssh_hint
+
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    assert _ssh_hint(8765) is None
+
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
+    hint = _ssh_hint(8765)
+    assert hint is not None
+    # The port has to appear on both sides, or the forward lands nowhere.
+    assert "-L 8765:127.0.0.1:8765" in hint
