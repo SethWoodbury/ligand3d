@@ -21,6 +21,12 @@ DEST="${1:-$ROOT/dist}"
 mkdir -p "$DEST"
 DEST="$(cd -- "$DEST" && pwd)"
 
+# Directories to remove on the way out. A second `trap ... EXIT` would replace
+# the first rather than add to it, so everything transient registers here.
+SCRATCH=()
+cleanup() { [[ ${#SCRATCH[@]} -gt 0 ]] && rm -rf "${SCRATCH[@]}"; }
+trap cleanup EXIT
+
 # Where the images are actually assembled. Building straight onto a network
 # filesystem is slow, and it leaves half-written .sif files visible to anyone
 # already pointing PATH at the directory. So a shared destination is built
@@ -34,7 +40,7 @@ if [[ -z $WORK ]]; then
 fi
 if [[ $staged == 1 ]]; then
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/ligand3d-build-XXXXXX")"
-    trap 'rm -rf "$WORK"' EXIT
+    SCRATCH+=("$WORK")
     echo "building locally in $WORK, then copying to $DEST"
 elif [[ -n $WORK ]]; then
     mkdir -p "$WORK"; WORK="$(cd -- "$WORK" && pwd)"
@@ -64,6 +70,23 @@ echo "building ligand3d $version from $commit$dirty"
 # --fakeroot, because building needs a writable root filesystem and this
 # machine has no subuid mapping. Each build's %post runs a self-check and fails
 # rather than producing an image that cannot do what it claims.
+# What %files copies. Pointing it at the checkout means copying .venv too —
+# 1.6 GB of the wrong platform's wheels, into the image root, to be deleted
+# again after pip has read pyproject.toml. It is slow, and copying thousands of
+# files that a test run may be writing to is how a build dies on a vanished
+# temp file. A filtered export is ~3 MB and holds still.
+# Outside $WORK deliberately: $WORK is what gets copied to a shared
+# destination, and the release should not carry a second copy of the source.
+CONTEXT="$(mktemp -d "${TMPDIR:-/tmp}/ligand3d-context-XXXXXX")"
+SCRATCH+=("$CONTEXT")
+tar -cf - -C "$ROOT" \
+    --exclude=./.venv --exclude=./.git --exclude=./dist --exclude=./build \
+    --exclude=./.pytest_cache --exclude=./.ruff_cache --exclude=./.mypy_cache \
+    --exclude='*/__pycache__' --exclude='*.pyc' --exclude='./*.egg-info' \
+    --exclude='./*.pdb' --exclude='./*.sdf' --exclude='./*.cif' --exclude='./*.mol' \
+    . | tar -xf - -C "$CONTEXT"
+echo "build context: $(du -sh "$CONTEXT" | cut -f1) (checkout is $(du -sh "$ROOT" | cut -f1))"
+
 for family in $FAMILIES; do
     echo
     echo "=== $family ==="
@@ -72,7 +95,9 @@ for family in $FAMILIES; do
     else
         out="$WORK/ligand3d-$family-$version.sif"
     fi
-    apptainer build --fakeroot --force --build-arg "FAMILY=$family" "$out" "$HERE/ligand3d.def"
+    # From inside the export, so the def's relative %files resolve to it.
+    ( cd "$CONTEXT" && apptainer build --fakeroot --force \
+        --build-arg "FAMILY=$family" "$out" "$HERE/ligand3d.def" )
     if [ "$family" = core ]; then
         ln -sfn "$(basename "$out")" "$WORK/ligand3d.sif"
     else
