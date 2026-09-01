@@ -31,6 +31,63 @@ ligand3d params     ensemble.sdf --code LIG
 ligand3d convert    min.cif min.pdb
 ```
 
+## Quickstart
+
+### At the IPD, on digs — nothing to install
+
+The containers live on `/net` and are world-readable, so every node can already see them
+and you need no environment of your own:
+
+```bash
+export PATH=/net/software/containers/users/woodbuse/ligand3d:$PATH   # put this in ~/.bashrc
+
+ligand3d build "O=C1CN2CCC1CC2" -o quin.cif   # SMILES -> minimized 3D
+ligand3d sketch                                # or draw it in a browser
+ligand3d doctor                                # what is available here, and why
+```
+
+That is the whole setup — no clone, no venv, no `module load`. `/net` and `/home` are
+automounted on every node, so the same line works from a login node or a compute node, and
+your labmates can use it by adding the same line.
+
+**To open the sketcher over SSH, forward the port.** The server binds `127.0.0.1` and
+never listens on an external interface, so a tunnel is the only way to reach it. The port
+is stable at 8765, so the same tunnel works every session:
+
+```bash
+# on digs
+$ ligand3d sketch
+ligand3d sketcher (jsme) running at http://127.0.0.1:8765/
+draw, set the options, and press Build. Ctrl-C to stop.
+  to reach it from your machine, run this locally first:
+    ssh -N -L 8765:127.0.0.1:8765 <the node it names>
+  then open http://127.0.0.1:8765/ there.
+```
+
+Copy that `ssh` line into a second terminal **on your laptop** — `sketch` has already
+filled in the node's real hostname — then open <http://127.0.0.1:8765/> in your browser.
+Leave the `ssh -N` running; it is the tunnel.
+
+At a machine that has a browser and a display, `ligand3d sketch` just opens one and none
+of this applies.
+
+Bare `sketch` starts in the richest image present, because the backend is chosen in the
+browser *after* the image has been picked — so you get 18 backends rather than the core
+image's 6. `sketch -b esen` starts on the fairchem side instead.
+
+### Anywhere else, or to work on the code
+
+```bash
+git clone git@github.com:SethWoodbury/ligand3d && cd ligand3d
+uv venv && uv pip install -e ".[xtb,protonation,names]"
+uv run ligand3d sketch
+```
+
+Add `,mace` **or** `,fairchem` for the neural potentials — not both; see
+[the split](#the-mace--fairchem-split--read-this-before-installing). Working from a
+checkout is also the only way to use `--slurm`, which needs `sbatch` and cannot run from
+inside a container.
+
 ## Why this exists
 
 Getting from a drawing to a usable 3D ligand is a five-minute job that everyone
@@ -50,6 +107,9 @@ takes seriously:
 
 ## Install
 
+The [Quickstart](#quickstart) covers the two normal cases. This is the full menu of
+extras, for a checkout:
+
 ```bash
 uv pip install -e .                    # core: RDKit only. 2D→3D plus MMFF94/UFF
 uv pip install -e ".[xtb]"             # GFN1/GFN2-xTB via tblite wheels
@@ -68,47 +128,42 @@ uv pip install -e ".[xtb,protonation,mace]"
 ```
 
 `[mace]` and `[fairchem]` cannot coexist — see
-[the split](#the-mace--fairchem-split--read-this-before-installing).
+[the split](#the-mace--fairchem-split--read-this-before-installing). `[names]` adds
+offline IUPAC-name lookup for `fetch`, which also needs a JRE on `PATH`.
 
-## Sharing it with other people
+Verified from a clean clone: `git clone`, `uv venv`, `uv pip install -e
+".[xtb,protonation,names]"`, then `uv run ligand3d build ...` and `uv run ligand3d sketch`
+all work with nothing else present.
 
-A labmate should not have to build an environment to use this. `container/build.sh`
-produces a directory holding a self-contained image and a launcher; they add one entry to
-`PATH` and everything works:
+## Releasing it to the lab
 
-```bash
-export PATH=/net/software/containers/users/woodbuse/ligand3d:$PATH
+Using it needs nothing but the `PATH` line in the [Quickstart](#quickstart) — this section
+is for the person cutting the release.
 
-ligand3d build "O=C1CN2CCC1CC2" -b mmff94,gfn2 -o quin.cif
-ligand3d fetch "3-Cyano-7-ethoxycoumarin"
-ligand3d sketch
-```
-
-### Opening the sketcher
-
-`ligand3d sketch` works through the launcher with nothing installed. It prints a URL;
-open that.
-
-Bare `sketch` starts in the **richest image available**, not the core one — the backend is
-chosen in the browser, after the image has already been picked, so landing in core would
-offer a menu of five. With the MACE image present you get fifteen. `sketch -b esen` starts
-on the fairchem side instead.
-
-**Over SSH, forward the port.** The server binds `127.0.0.1` and never listens on an
-external interface, so a browser on your laptop reaches it only through a tunnel. The port
-is stable — 8765 unless something already has it — so the same tunnel works every session:
+`container/build.sh` produces a directory holding the images, a launcher, and a `VERSION`
+note saying what is in them. Everything is world-readable, so a labmate needs only that
+one `PATH` entry.
 
 ```bash
-ligand3d sketch                              # on the cluster node
-ssh -N -L 8765:127.0.0.1:8765 <that node>    # on your laptop, in another terminal
+container/build.sh                    # into ./dist
+container/build.sh /net/software/containers/users/woodbuse/ligand3d
 ```
 
-Then open `http://127.0.0.1:8765/` on the laptop. `sketch` prints that exact command,
-with the node's real hostname filled in, whenever it can't open a browser itself.
+A shared destination is built locally and copied at the end, each image verified by
+checksum, with the release it replaced kept beside it as `.previous`. A failed build or a
+bad copy leaves the live release untouched. The build context is a filtered export of the
+checkout rather than the checkout itself — otherwise `%files` copies `.venv`, which is 1.6
+GB of the wrong platform's wheels and turns a four-minute release into twenty.
 
-Nothing is installed, nothing is cloned, and no venv is created. **The source is baked
-into the image**, so a run is pinned to a released version rather than to whatever happens
-to be checked out — a colleague's results cannot change because you were mid-edit. The
+The build runs `container/selfcheck.py` inside each image and **fails rather than producing
+one that cannot do what it claims** — imports, a JRE for OPSIN, every required backend, the
+family's own neural module, and a real end-to-end build. That check has earned itself
+three times: a missing `libgomp1`, which made GFN1/GFN2 fail at import with a message
+naming no library; `xtb` absent so GFN-FF was silently unavailable; and `graph_longrange`
+missing, which would have shipped a MACE image whose POLAR models could not be unpickled.
+
+**The source is baked into the image**, so a run is pinned to a released version rather
+than to whatever happens to be checked out — a colleague's results cannot change because you were mid-edit. The
 trade is that a code change needs a rebuild before it reaches anyone.
 
 To cut a release:
@@ -363,8 +418,6 @@ Two warnings that are not about convenience:
   commercial use needs the licensor.
 - **`uma-s-1` is archived upstream over an extensivity bug.** ligand3d does not carry that
   alias, and neither should you — `uma-s` is 1.1.
-
-### Which model, and what it costs
 
 ### Which model, and what it costs
 
