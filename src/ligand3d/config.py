@@ -192,6 +192,18 @@ MODELS: tuple[ModelSpec, ...] = (
               _hf("facebook--fairchem-uma-s-1p2", "uma-s-1p2.pt"),
               "UMA small 1.2.", takes_charge=True, approx_mb=2330,
               repo="facebook/fairchem-uma-s-1p2", training="UMA 1.2", spin_aware=True, speed="36 s", measured=True, load_seconds=2.0, memory="~6 GB", accuracy="newer UMA small"),
+    # Timed 2026-09-01 in the fairchem container, same molecule and machine as
+    # the rest of the table: 35.2 s end to end over three runs (35.2/35.3/38.7).
+    # load_seconds is carried over from uma-s-1p2 because the two were measured
+    # back to back under identical conditions and came out equal — 31.1 s vs
+    # 31.5 s on a stopwatch around make_calculator, which is a different scale
+    # from what this column records but establishes that they load alike.
+    ModelSpec("uma-s-1p2p1", "fairchem",
+              _hf("facebook--fairchem-uma-s-1p2p1", "uma-s-1p2p1.pt"),
+              "UMA small 1.2.1.", takes_charge=True, approx_mb=2330,
+              repo="facebook/UMA", training="UMA 1.2.1", spin_aware=True,
+              speed="35 s", measured=True, load_seconds=2.0, memory="~6 GB",
+              accuracy="newest UMA small; FAIR recommends it over 1.2"),
     ModelSpec("uma-m", "fairchem",
               _hf("facebook--fairchem-uma-m-1p1", "uma-m-1p1.pt"),
               "UMA medium 1.1. Largest and slowest; needs real memory.",

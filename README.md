@@ -403,7 +403,7 @@ convention*, not evidence of a HuggingFace repo:
 | `mace-mp` | [github.com/ACEsuit/mace-mp](https://github.com/ACEsuit/mace-mp) | |
 | `mace-mh`, `mace-mh-1` | [github.com/ACEsuit/mace-foundations](https://github.com/ACEsuit/mace-foundations) releases | |
 | `mace-omol` | the OMol25 release | |
-| `uma-s`, `uma-s-1p2`, `uma-m` | [huggingface.co/facebook/UMA](https://huggingface.co/facebook/UMA) — **gated** | accept the FAIR Chemistry License v1, make a read token, then `HF_TOKEN=hf_… bash download_uma_models.sh` from the IPD store. FAIR publishes MD5s on the model card and the store verifies against them |
+| `uma-s`, `uma-s-1p2`, `uma-s-1p2p1`, `uma-m` | [huggingface.co/facebook/UMA](https://huggingface.co/facebook/UMA) — **gated** | accept the FAIR Chemistry License v1, make a read token, then `HF_TOKEN=hf_… bash download_uma_models.sh` from the IPD store. FAIR publishes MD5s on the model card and the store verifies against them |
 | `esen*`, `allscaip*` | [huggingface.co/facebook/OMol25](https://huggingface.co/facebook/OMol25) — **gated** | all five live in that one repo under `checkpoints/`, despite the store's per-model directory names |
 | `aimnet2` | **downloads itself** | caches in `~/.cache/aimnet`; this is why its first call costs 14 s and why it needs no entry here |
 
@@ -442,6 +442,7 @@ answering it. Every flag below was determined by measurement — setting
 | `esen-md-direct` | eSEN md direct | **yes** | 406 MB | |
 | `uma-s` | UMA s 1.1 | **yes** | 1.2 GB | universal; `omol` task |
 | `uma-s-1p2` | UMA s 1.2 | **yes** | 2.3 GB | |
+| `uma-s-1p2p1` | UMA s 1.2.1 | **yes** | 2.3 GB | newest small UMA; FAIR recommends it over 1.2 |
 | `uma-m` | UMA m 1.1 | **yes** | 11 GB | slow; needs real memory |
 | `allscaip` | AllScAIP OMol102M cons | **yes** | 688 MB | |
 | `allscaip-direct` | AllScAIP OMol102M direct | **yes** | 695 MB | |
@@ -686,6 +687,7 @@ the rest:
 | `esen` | 7.9 s | 1.1 s |
 | `allscaip-direct` | 11 s | 1.1 s |
 | `uma-s` | 15 s | 2.6 s |
+| `uma-s-1p2p1` | 35 s | not timed on GPU |
 | `esen-md-direct` | 16 s | 1.5 s |
 | `allscaip` | 23 s | 2.5 s |
 | `uma-s-1p2` | 36 s | 3.4 s |
