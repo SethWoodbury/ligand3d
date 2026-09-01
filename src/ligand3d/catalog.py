@@ -222,7 +222,7 @@ _MODEL_DATASET: dict[str, str] = {
     "mace-off-24": "spice", "mace-mh-spice": "spice",
     "mace-omol": "omol", "esen": "omol", "esen-sm-direct": "omol",
     "esen-md-direct": "omol", "allscaip": "omol", "allscaip-direct": "omol",
-    "uma-s": "omol", "uma-s-1p2": "omol", "uma-sm": "omol", "uma-m": "omol",
+    "uma-s": "omol", "uma-s-1p2": "omol", "uma-m": "omol",
     "mace-mp": "materials",
     "mace-mh": "multihead", "mace-mh-1": "multihead",
     "mace-polar": "polar", "mace-polar-s": "polar", "mace-polar-l": "polar",
