@@ -53,13 +53,6 @@ for ((i = 1; i <= $#; i++)); do
     esac
 done
 
-if [[ $wants_slurm == 1 ]]; then
-    die "--slurm needs sbatch, which does not work inside a container: its auth
-plugins cannot be reached from one. Submit from a checkout instead —
-  git clone git@github.com:SethWoodbury/ligand3d && cd ligand3d
-  uv pip install -e '.[xtb,protonation]'
-Everything else here works unchanged."
-fi
 
 # ligand3d builds one image per family, each carrying the *whole* non-neural
 # feature set — tblite, protonation, name lookup — so a chain like
@@ -128,6 +121,54 @@ binds=()
 for path in /home /net /mnt /projects /scratch; do
     [[ -d $path ]] && binds+=(--bind "$path:$path")
 done
+
+# SLURM, carried in rather than refused.
+#
+# This used to be declared impossible — "its auth plugins cannot be reached
+# from a container" — and that was wrong. sbatch needs four things, all of
+# which bind cleanly: the client binaries, the plugin directory holding
+# libslurmfull, the config, and munge's socket. With those, sbatch
+# authenticates and schedules from inside the image exactly as it does outside;
+# verified with `sbatch --test-only`, which is a real controller round-trip.
+#
+# There is no nesting problem: the job script runs on the compute node, under
+# slurmd, not inside this container.
+#
+# Bound read-only, and each only if the host actually has it, so a machine
+# without SLURM is unaffected rather than failing to start.
+slurm_binds=()
+for exe in sbatch squeue scancel sacct sinfo scontrol; do
+    p="$(command -v $exe 2>/dev/null)" && slurm_binds+=(--bind "$p:$p:ro")
+done
+if [[ ${#slurm_binds[@]} -gt 0 ]]; then
+    for path in /etc/slurm /etc/slurm-llnl /run/munge /var/run/munge; do
+        [[ -e $path ]] && slurm_binds+=(--bind "$path:$path:ro")
+    done
+    # The plugin directory, and libmunge, which the auth plugin dlopens. Found
+    # rather than hardcoded: the paths differ across distributions.
+    for path in /usr/lib/slurm /usr/lib64/slurm /usr/lib/x86_64-linux-gnu/slurm; do
+        [[ -d $path ]] && slurm_binds+=(--bind "$path:$path:ro")
+    done
+    # libmunge, which the auth plugin dlopens. Looked for in the usual places
+    # first and only then via ldconfig — which lives in /usr/sbin and so is not
+    # always on PATH. Leaning on it alone bound nothing and the failure landed
+    # far away, as "dlopen(auth_munge.so): libmunge.so.2: cannot open".
+    munge_found=0
+    for lib in /usr/lib/x86_64-linux-gnu/libmunge.so.2 /usr/lib64/libmunge.so.2 \
+               /lib/x86_64-linux-gnu/libmunge.so.2 /usr/lib/libmunge.so.2; do
+        [[ -e $lib ]] && { slurm_binds+=(--bind "$lib:$lib:ro"); munge_found=1; }
+    done
+    if [[ $munge_found == 0 ]]; then
+        for ldc in /usr/sbin/ldconfig /sbin/ldconfig ldconfig; do
+            command -v "$ldc" >/dev/null 2>&1 || continue
+            while read -r lib; do
+                [[ -e $lib ]] && slurm_binds+=(--bind "$lib:$lib:ro")
+            done < <("$ldc" -p 2>/dev/null | grep -oE '/[^ ]*libmunge\.so[^ ]*' | sort -u)
+            break
+        done
+    fi
+    binds+=("${slurm_binds[@]}")
+fi
 cwd="$(pwd -P)"
 case "$cwd" in /home/*|/net/*|/mnt/*|/projects/*|/scratch/*) ;; *) binds+=(--bind "$cwd:$cwd") ;; esac
 

@@ -229,12 +229,27 @@ class TestTheLauncher:
         for token in ("esen", "uma-", "allscaip", "mace", "aimnet2"):
             assert token in text, f"{token} is not routed anywhere"
 
-    def test_it_refuses_slurm_with_a_way_forward(self):
-        """sbatch cannot reach its auth plugins from inside a container. The
-        failure is unavoidable; being told what to do instead is not."""
+    def test_it_carries_slurm_into_the_image(self):
+        """SLURM works from inside a container, given four bind mounts.
+
+        This replaced a test asserting the opposite. The launcher used to
+        refuse --slurm outright, on the stated grounds that sbatch could not
+        reach its auth plugins from a container — which turned out to be
+        false. Binding the client binaries, the plugin directory, the config
+        and munge's socket is enough: `sbatch --test-only` from inside the
+        image gets a real job id and node assignment back from the controller.
+
+        Each bind is conditional on the host having the path, so a machine
+        with no SLURM is unaffected rather than failing to start.
+        """
         text = self.LAUNCHER.read_text()
-        assert "--slurm" in text
-        assert "uv pip install" in text, "refuses --slurm without offering an alternative"
+        assert "slurm_binds" in text, "the launcher no longer carries SLURM in"
+        for needed in ("sbatch", "/etc/slurm", "munge", "libmunge"):
+            assert needed in text, f"{needed} is not bound into the image"
+        assert "command -v $exe" in text, "binds must be conditional on the host having them"
+        assert "uv pip install '.[xtb,protonation]'" not in text, (
+            "the launcher still tells people to leave the container for --slurm"
+        )
 
     def test_the_image_carries_what_it_claims(self):
         """The def file's help text promises specific backends. The build's

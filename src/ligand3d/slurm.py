@@ -92,6 +92,17 @@ def slurm_available() -> bool:
 
 
 def apptainer_available() -> bool:
+    """Whether the *job* will be able to find apptainer.
+
+    The job runs on a compute node, so what matters is apptainer there, not
+    here. Usually the two agree. They do not when ligand3d is itself running
+    inside a container: the image has no apptainer, and asking it would refuse
+    a submission that would have worked perfectly well. The launcher sets
+    LIGAND3D_LAUNCHER, and the launcher only starts at all when the host has
+    apptainer — so in that case the answer is already known.
+    """
+    if os.environ.get("LIGAND3D_LAUNCHER"):
+        return True
     return shutil.which("apptainer") is not None or shutil.which("singularity") is not None
 
 
@@ -387,6 +398,15 @@ def render_script(
         "",
         "set -euo pipefail",
         'export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"',
+        "",
+        "# sbatch exports the submitting environment, and when the submission",
+        "# came from inside a container that environment carries APPTAINER_BIND",
+        "# — the submitter's bind list. Applied again on a compute node it",
+        "# refers to paths that may not exist there, and apptainer treats a",
+        "# missing bind source as fatal. The job describes its own mounts",
+        "# below; it should not inherit anyone else's.",
+        "unset APPTAINER_BIND APPTAINER_BINDPATH SINGULARITY_BIND SINGULARITY_BINDPATH",
+        "unset APPTAINER_CONTAINER SINGULARITY_CONTAINER APPTAINER_NAME SINGULARITY_NAME",
         "",
         'echo "host=$(hostname) job=${SLURM_JOB_ID:-none}"',
     ]

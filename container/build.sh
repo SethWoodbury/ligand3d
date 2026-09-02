@@ -155,10 +155,23 @@ if [[ $staged == 1 ]]; then
         fi
         echo "  ok  $name"
     done
-    rm -rf "$DEST.previous"
-    [[ -d $DEST ]] && mv "$DEST" "$DEST.previous"
+    # Rename, never delete, to put the new release in place. On NFS a
+    # directory whose files are still open cannot be removed — the server
+    # leaves .nfs* handles behind and rm reports "Directory not empty" — and
+    # a release that is built, copied and verified must not then be abandoned
+    # because something still had the *old* one open. A rename always works.
+    if [[ -d $DEST ]]; then
+        previous="$DEST.previous"
+        [[ -e $previous ]] && previous="$DEST.previous.$(date +%Y%m%dT%H%M%S)"
+        mv "$DEST" "$previous"
+    fi
     mv "$DEST.incoming" "$DEST"
-    [[ -d $DEST.previous ]] && echo "  the release it replaced is in $DEST.previous"
+    [[ -n ${previous:-} ]] && echo "  the release it replaced is in $previous"
+    # Old ones are tidied on a best-effort basis; still-open handles just mean
+    # they wait for the next run rather than failing this one.
+    for stale in "$DEST".previous.*; do
+        [[ -d $stale ]] && rm -rf "$stale" 2>/dev/null || true
+    done
 fi
 
 echo
