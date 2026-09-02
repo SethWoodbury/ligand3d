@@ -81,6 +81,23 @@ def main() -> int:
         # Without this the MACE-POLAR checkpoints cannot be unpickled at all.
         check("import graph_longrange (MACE-POLAR)", _importable("graph_longrange"))
 
+    # The sketcher's preview panel renders through rdMolDraw2D, which links
+    # against X libraries a slim image does not carry by default. Importing it
+    # is the check: it shipped broken once because nothing here touched it.
+    try:
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+        from rdkit.Chem.Draw import rdMolDraw2D
+
+        mol = Chem.MolFromSmiles("c1ccccc1O")
+        AllChem.Compute2DCoords(mol)
+        drawer = rdMolDraw2D.MolDraw2DSVG(120, 90)
+        drawer.DrawMolecule(mol)
+        drawer.FinishDrawing()
+        check("2D depiction (sketcher preview)", "<svg" in drawer.GetDrawingText())
+    except Exception as exc:
+        check("2D depiction (sketcher preview)", False, str(exc))
+
     # The one that matters: a real build, end to end.
     result = subprocess.run(
         [sys.executable, "-m", "ligand3d.cli", "build", "O=C1CN2CCC1CC2",

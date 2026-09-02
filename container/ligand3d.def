@@ -54,8 +54,15 @@ From: python:3.12-slim-trixie
     # xtb is the standalone binary GFN-FF runs through; if the distribution
     # has no package the build continues without it and GFN-FF is simply
     # unavailable, which the self-check reports rather than fails on.
+    # The four libraries rdkit's rdMolDraw2D.so links against and the slim base
+    # omits — read off `ldd`, not guessed. Nothing here opens a window; the
+    # drawing goes to an SVG string. But the extension will not load without
+    # them, and the failure surfaced as the sketcher's preview panel killing
+    # the connection mid-request, which reached the browser as "Failed to
+    # fetch" and named nothing.
     apt-get update
-    apt-get install -y --no-install-recommends libgomp1 default-jre-headless
+    apt-get install -y --no-install-recommends libgomp1 default-jre-headless \
+        libxrender1 libx11-6 libxext6 libexpat1
     apt-get install -y --no-install-recommends xtb || echo "no xtb package; GFN-FF will be unavailable"
     apt-get clean
     rm -rf /var/lib/apt/lists/*

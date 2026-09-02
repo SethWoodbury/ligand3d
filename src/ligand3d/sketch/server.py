@@ -347,13 +347,19 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         Called on every edit, so a half-finished structure must produce an
         explanation rather than a stack trace or a blank panel.
         """
-        from ..depict import depict_molblock
-
         molblock = data.get("molblock") or ""
         if not molblock.strip():
             self._json({"empty": True})
             return
         try:
+            # Imported inside the try on purpose. RDKit's drawing module links
+            # against X libraries that a slim image may not carry, and when it
+            # cannot load, an import at function scope propagates out of the
+            # handler and kills the connection — which reaches the page as a
+            # bare "Failed to fetch", naming nothing. A message beats a dead
+            # socket.
+            from ..depict import depict_molblock
+
             depiction = depict_molblock(
                 molblock,
                 width=int(data.get("width") or 480),

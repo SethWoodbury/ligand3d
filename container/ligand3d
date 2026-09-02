@@ -39,12 +39,17 @@ command -v apptainer >/dev/null || die "apptainer is not on PATH; this launcher 
 backend=""
 wants_slurm=0
 subcommand=""
+port=""
+no_browser=0
 for ((i = 1; i <= $#; i++)); do
     case "${!i}" in -*) ;; *) [[ -z $subcommand ]] && subcommand="${!i}" ;; esac
     case "${!i}" in
         -b|--backend) j=$((i + 1)); [[ $j -le $# ]] && backend="${!j}" ;;
         --backend=*)  backend="${!i#--backend=}" ;;
         --slurm)      wants_slurm=1 ;;
+        --port)       j=$((i + 1)); [[ $j -le $# ]] && port="${!j}" ;;
+        --port=*)     port="${!i#--port=}" ;;
+        --no-browser) no_browser=1 ;;
     esac
 done
 
@@ -78,6 +83,44 @@ if [[ $subcommand == sketch && -z $backend ]]; then
     done
 fi
 
+# The sketcher's page is served from inside the container, but the browser
+# that should show it lives out here. Nothing in the image can open one, and it
+# cannot reach the host's, so `sketch` used to print a URL and leave you to it.
+# The launcher runs on the host, so it can do the opening: wait for the port to
+# answer, then hand it to whatever browser this machine has.
+#
+# --no-browser goes to the container either way, so it does not also print a
+# line about having no browser — which is true in there and beside the point
+# out here. It still prints the URL, and the ssh -L hint when the session is
+# remote, which is the case no local browser can help with.
+open_when_ready () {
+    local candidates=(${1:-8765 8766 8767 8768 8769}) opener="" p=""
+    for try in xdg-open gio open firefox google-chrome chromium; do
+        command -v "$try" >/dev/null 2>&1 && { opener="$try"; break; }
+    done
+    [[ -n $opener ]] || return 0        # nothing to open with; the URL stands
+    [[ -n ${SSH_CONNECTION:-} ]] && return 0   # a browser here is the wrong screen
+
+    for _ in $(seq 1 120); do
+        for p in "${candidates[@]}"; do
+            if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+                exec 3<&- 2>/dev/null
+                [[ $opener == gio ]] && set -- open "http://127.0.0.1:$p/" \
+                                     || set -- "http://127.0.0.1:$p/"
+                "$opener" "$@" >/dev/null 2>&1 &
+                return 0
+            fi
+        done
+        sleep 0.5
+    done
+}
+
+sketch_args=("$@")
+if [[ $subcommand == sketch && $no_browser == 0 ]]; then
+    open_when_ready "$port" &
+    sketch_args=("$@" --no-browser)
+fi
+
 own="$HERE/ligand3d-$family.sif"
 [[ $family == core ]] && own="$CORE_SIF"
 
@@ -97,7 +140,7 @@ if [[ -f $own ]]; then
         --env LIGAND3D_LAUNCHER=1 \
         --env "HF_HOME=${HF_HOME:-/net/databases/huggingface}" \
         --env TORCHDYNAMO_DISABLE=1 \
-        "$own" "$@"
+        "$own" "${sketch_args[@]}"
 fi
 
 # --- fallback: a lab image that has the potentials but not ligand3d ---------
@@ -132,4 +175,4 @@ exec apptainer exec "${nv[@]}" "${binds[@]}" --bind "$payload:$payload" --pwd "$
     --env "HF_HOME=${HF_HOME:-/net/databases/huggingface}" \
     --env TORCHDYNAMO_DISABLE=1 \
     --env PYTHONNOUSERSITE=1 \
-    "$image" python -m ligand3d.cli "$@"
+    "$image" python -m ligand3d.cli "${sketch_args[@]}"
