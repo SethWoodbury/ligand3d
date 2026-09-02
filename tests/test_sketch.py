@@ -467,9 +467,17 @@ class TestStaticAssets:
             assert endpoint in page, f"page never calls {endpoint}"
 
     def test_no_reference_to_a_removed_editor(self):
-        """Ketcher was removed; nothing should still advertise it."""
-        text = srv.APP_PAGE.read_text().replace("/sketcher/", "/")
-        assert "ketcher" not in text.lower()
+        """Ketcher was removed; nothing should still advertise it.
+
+        Matched on a word boundary rather than as a substring: "sketcher" —
+        the name of the thing this page *is* — contains "ketcher", so a plain
+        `in` check passed only for as long as the page never said the word.
+        """
+        import re
+
+        text = srv.APP_PAGE.read_text()
+        hits = [m.group() for m in re.finditer(r"\bketcher\b", text, re.IGNORECASE)]
+        assert hits == [], f"the removed Ketcher editor is still referenced: {hits}"
 
 
 class TestAppJavaScript:

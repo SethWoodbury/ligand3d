@@ -521,6 +521,9 @@
 
         <!-- One control rather than two checkboxes: these are three places to
              run the same build, and picking two of them is not a thing. -->
+        <div class="note" id="familyNote" hidden style="margin:.4rem 0 .2rem"></div>
+        <div class="note" id="slurmWhy" hidden style="margin:.4rem 0 .2rem"></div>
+
         <div id="slurmBox" hidden>
           <div class="row split">
             <div>
@@ -1340,6 +1343,18 @@ function whereValue() {
 function setupSlurm(status) {
   const slurmOk = !!(status && status.available);
   const containerOk = !!(CONFIG && CONFIG.container && CONFIG.container.available);
+
+  // A missing "on a GPU node" option used to just not be there, which reads as
+  // a removed feature rather than an unreachable one. sbatch cannot be called
+  // from inside a container — its auth plugins are not visible in there — so
+  // the fix is to run the sketcher from a checkout, and that is worth saying.
+  const why = el("slurmWhy");
+  if (why) {
+    why.innerHTML = slurmOk ? "" :
+      "GPU submission needs <code>sbatch</code>, which a container cannot reach. " +
+      "Run the sketcher from a checkout to submit to SLURM.";
+    why.hidden = slurmOk;
+  }
   if (!slurmOk && !containerOk) return;
 
   const options = ['<option value="local">on this machine</option>'];
@@ -1661,7 +1676,10 @@ function populateBackends(cfg) {
     '<option value="mmff94">mmff94 - classical, milliseconds</option>',
     '<option value="uff">uff - classical, broad elements</option>',
   ];
-  const groups = { semiempirical: [], mlff: [], ff: [] };
+  // Keyed by the `kind` each backend declares, so a new kind gets its own
+  // heading instead of silently landing under "force fields" — which is how
+  // ORCA, a quantum chemistry package, spent a while being labelled one.
+  const groups = { semiempirical: [], mlff: [], dft: [], ff: [] };
   backends.filter(usable).forEach((b) => {
     if (b.id === "mmff94" || b.id === "uff") return;
     const via = !b.ready ? " (in a container)" : "";
@@ -1672,6 +1690,9 @@ function populateBackends(cfg) {
     options.push('<optgroup label="semi-empirical">' + groups.semiempirical.join("") + "</optgroup>");
   if (groups.mlff.length)
     options.push('<optgroup label="machine-learned">' + groups.mlff.join("") + "</optgroup>");
+  if (groups.dft.length)
+    options.push('<optgroup label="DFT (quantum chemistry) - minutes to hours">' +
+                 groups.dft.join("") + "</optgroup>");
   if (groups.ff.length)
     options.push('<optgroup label="other force fields">' + groups.ff.join("") + "</optgroup>");
   const missing = backends.filter((b) => !usable(b));
@@ -1680,6 +1701,26 @@ function populateBackends(cfg) {
       '<option value="mmff94,' + b.id + '" disabled>' + b.id + " - " + b.reason +
       "</option>").join("") + "</optgroup>");
   select.innerHTML = options.join("");
+
+  // "missing Python module(s): fairchem" is true and useless in a browser:
+  // you cannot pip install into a running image. The actionable thing is that
+  // the other family lives in a different image, reachable by restarting.
+  // mace-torch pins e3nn 0.4.4 and fairchem-core wants >=0.5, so this is a
+  // restart rather than a toggle, and saying so beats an unexplained grey row.
+  const note = el("familyNote");
+  if (note) {
+    const blocked = new Set(missing.map((b) => (b.reason || "").match(/module\(s\): (\w+)/)?.[1])
+                                   .filter(Boolean));
+    if (blocked.has("fairchem"))
+      note.innerHTML = "eSEN, UMA and AllScAIP live in the other image \u2014 restart with " +
+        "<code>ligand3d sketch -b esen</code>. They cannot share one environment: " +
+        "mace-torch pins e3nn 0.4.4 and fairchem-core needs \u22650.5.";
+    else if (blocked.has("mace"))
+      note.innerHTML = "The MACE models live in the other image \u2014 restart with " +
+        "<code>ligand3d sketch -b mace-off</code>.";
+    else note.innerHTML = "";
+    note.hidden = !note.innerHTML;
+  }
   // Keep the current choice across a repopulate, so switching to "in a
   // container" does not silently reset a method that is now selectable.
   select.value = previous || cfg.defaults.backend || "mmff94";
