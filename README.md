@@ -403,8 +403,8 @@ convention*, not evidence of a HuggingFace repo:
 | `mace-mp` | [github.com/ACEsuit/mace-mp](https://github.com/ACEsuit/mace-mp) | |
 | `mace-mh`, `mace-mh-1` | [github.com/ACEsuit/mace-foundations](https://github.com/ACEsuit/mace-foundations) releases | |
 | `mace-omol` | the OMol25 release | |
-| `uma-s`, `uma-s-1p2`, `uma-s-1p2p1`, `uma-m` | [huggingface.co/facebook/UMA](https://huggingface.co/facebook/UMA) — **gated** | accept the FAIR Chemistry License v1, make a read token, then `HF_TOKEN=hf_… bash download_uma_models.sh` from the IPD store. FAIR publishes MD5s on the model card and the store verifies against them |
-| `esen*`, `allscaip*` | [huggingface.co/facebook/OMol25](https://huggingface.co/facebook/OMol25) — **gated** | all five live in that one repo under `checkpoints/`, despite the store's per-model directory names |
+| `uma-s`, `uma-s-1p2`, `uma-s-1p2p1`, `uma-m` | [huggingface.co/facebook/UMA](https://huggingface.co/facebook/UMA) — **gated** | accept the FAIR Chemistry License v1, make a read token, then `HF_TOKEN=hf_… bash fetch_gated.sh` from the IPD store. FAIR publishes MD5s on the model card and the store verifies against them |
+| `esen*`, `allscaip*` | [huggingface.co/facebook/OMol25](https://huggingface.co/facebook/OMol25) — **gated** | all five live in that one repo under `checkpoints/`, despite the store's per-model directory names; same `fetch_gated.sh` reprovisions them |
 | `aimnet2` | **downloads itself** | caches in `~/.cache/aimnet`; this is why its first call costs 14 s and why it needs no entry here |
 
 Two warnings that are not about convenience:
