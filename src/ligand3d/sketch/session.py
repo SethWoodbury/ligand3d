@@ -498,15 +498,24 @@ def _run_on_slurm(job: Job, molecule, settings, base: Path) -> None:
     )
 
     options = job.slurm_options or {}
+    partition = str(options.get("partition") or "gpu")
     config = SlurmConfig(
-        partition=str(options.get("partition") or "gpu"),
+        partition=partition,
         gpu_class=str(options.get("gpu_class") or "small"),
         walltime=str(options.get("walltime") or "01:00:00"),
         cpus=int(options.get("cpus") or 4),
         memory=str(options.get("memory") or "16G"),
+        # A cpu destination asks for no GRES. SlurmConfig.is_gpu already
+        # refuses to emit one off a gpu partition, so this is belt and braces
+        # — but an explicit 0 is what the caller meant.
+        gpus=int(options.get("gpus", 1)),
+        account=str(options.get("account") or "IPD"),
         job_name=job_name_for(molecule.name),
     )
-    if not needs_gpu(settings.backend):
+    if not needs_gpu(settings.backend) and config.is_gpu:
+        # Only worth saying when a GPU was actually requested. Choosing a cpu
+        # node for quantum chemistry is the right answer, not a mistake to
+        # warn about.
         job.say(
             f"{settings.backend} is not a neural potential, so a GPU will not help — "
             "queueing costs more than the calculation does",

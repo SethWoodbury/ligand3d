@@ -567,7 +567,7 @@
                 <option value="cpu-bf">cpu-bf (backfill)</option>
               </select>
             </div>
-            <div>
+            <div id="gpuField">
               <label for="slurm_gpu">GPU</label>
               <select id="slurm_gpu">
                 <option value="small">small</option>
@@ -578,6 +578,20 @@
             <div>
               <label for="slurm_time">Walltime</label>
               <input type="text" id="slurm_time" value="01:00:00" spellcheck="false">
+            </div>
+          </div>
+          <div class="row three">
+            <div>
+              <label for="slurm_cpus">CPU cores</label>
+              <input type="number" id="slurm_cpus" value="4" min="1" max="128" step="1">
+            </div>
+            <div>
+              <label for="slurm_mem">Memory</label>
+              <input type="text" id="slurm_mem" value="16G" spellcheck="false">
+            </div>
+            <div>
+              <label for="slurm_account">Account</label>
+              <input type="text" id="slurm_account" value="IPD" spellcheck="false">
             </div>
           </div>
           <div class="note" id="slurmNote">
@@ -1351,6 +1365,11 @@ function collectSettings() {
       partition: el("slurm_partition").value,
       gpu_class: el("slurm_gpu").value,
       walltime: el("slurm_time").value.trim() || "01:00:00",
+      cpus: Number(el("slurm_cpus").value) || 4,
+      memory: el("slurm_mem").value.trim() || "16G",
+      account: el("slurm_account").value.trim() || "IPD",
+      // A cpu destination must not request a GRES, whatever the class box says.
+      gpus: whereRaw() === "slurm-cpu" ? 0 : 1,
     },
   };
 }
@@ -1364,25 +1383,49 @@ let partitionTouched = false;
 
 function steerPartition() {
   const select = el("slurm_partition");
-  if (!select || partitionTouched) return;
-  const chain = (el("backend").value || "").split(",").map((s) => s.trim());
+  if (!select) return;
+  const cpuSide = whereRaw() === "slurm-cpu";
+
+  // Only the partitions that belong to the chosen destination, so there is no
+  // way to ask for a cpu partition and a GPU at the same time.
+  const wanted = cpuSide
+    ? [["cpu", "cpu"], ["cpu-bf", "cpu-bf (backfill)"]]
+    : [["gpu", "gpu"], ["gpu-bf", "gpu-bf (backfill)"]];
+  const current = select.value;
+  select.innerHTML = wanted
+    .map(([v, t]) => '<option value="' + v + '">' + t + "</option>").join("");
+  if (wanted.some(([v]) => v === current)) select.value = current;
+
+  const gpuRow = el("gpuField");
+  if (gpuRow) gpuRow.hidden = cpuSide;         // no GRES on a cpu node
+
+  // Say when the destination is the wrong shape for the work, rather than
+  // silently letting a DFT job hold a card it will never touch.
+  const chain = (el("backend").value || "").split(",").map((x) => x.trim());
   const byId = new Map((backends || []).map((b) => [b.id, b]));
   const kinds = new Set(chain.map((n) => (byId.get(n) || {}).kind).filter(Boolean));
-  if (kinds.has("mlff")) return;                       // wants the GPU
-  const quantum = kinds.has("dft") || kinds.has("hf");
-  select.value = quantum ? "cpu" : select.value;
-  const gpu = el("slurm_gpu");
-  if (gpu) gpu.disabled = quantum;                     // no GRES on a cpu node
+  const quantum = (kinds.has("dft") || kinds.has("hf")) && !kinds.has("mlff");
   const why = el("partitionWhy");
   if (why) {
-    why.textContent = quantum
-      ? "ORCA is CPU-parallel — a GPU would sit idle, so this goes to the cpu partition."
-      : "";
-    why.hidden = !quantum;
+    if (quantum && !cpuSide)
+      why.textContent = "ORCA is CPU-parallel — a GPU would sit idle here. "
+        + "Consider \u201con a CPU node\u201d.";
+    else if (kinds.has("mlff") && cpuSide)
+      why.textContent = "Neural potentials are much slower on CPU, though the "
+        + "queue is usually shorter.";
+    else why.textContent = "";
+    why.hidden = !why.textContent;
   }
 }
 
 function whereValue() {
+  const select = el("runWhere");
+  const raw = select ? select.value : "local";
+  // The server knows three destinations; the fourth is a shape of the third.
+  return raw === "slurm-cpu" ? "slurm" : raw;
+}
+
+function whereRaw() {
   const select = el("runWhere");
   return select ? select.value : "local";
 }
@@ -1409,7 +1452,12 @@ function setupSlurm(status) {
     options.push('<option value="container">in a container (here)</option>');
   }
   if (slurmOk) {
+    // Two SLURM destinations rather than one plus a partition you have to know
+    // to change. A GPU is right for the neural potentials and useless for
+    // ORCA, and the cpu queue is often shorter — which is a good reason to
+    // pick it even for work that could use a card.
     options.push('<option value="slurm">on a GPU node (SLURM)</option>');
+    options.push('<option value="slurm-cpu">on a CPU node (SLURM)</option>');
   }
   el("runWhere").innerHTML = options.join("");
   el("slurmBox").hidden = false;
@@ -1420,6 +1468,7 @@ function setupSlurm(status) {
 
   el("runWhere").addEventListener("change", () => {
     el("slurmOpts").hidden = whereValue() !== "slurm";
+    steerPartition();
     populateBackends(CONFIG);   // greying depends on where it will run
     slurmAdvice();
   });
