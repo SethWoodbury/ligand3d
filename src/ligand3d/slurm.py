@@ -149,6 +149,44 @@ def needs_gpu(backend_spec: str) -> bool:
     return False
 
 
+def wants_cpu_only(backend_spec: str) -> bool:
+    """True for a chain whose expensive end is quantum chemistry.
+
+    ORCA is MPI-parallel across CPU cores and gets nothing from a GPU for the
+    methods here, so sending a DFT job to the gpu partition holds a card that
+    it never touches — while queueing behind every job that actually needs one.
+    The cpu partition has 132 nodes and 28+ cores each, which is what ORCA
+    wants anyway.
+
+    False if the chain contains a neural potential: those do want the GPU, and
+    a mixed chain has to go where the expensive half runs.
+    """
+    from .minimize import get_backend, resolve_name
+
+    kinds = set()
+    for name in (part.strip() for part in backend_spec.split(",")):
+        try:
+            kinds.add(get_backend(resolve_name(name)).caps.kind)
+        except Ligand3DError:
+            continue
+    if "mlff" in kinds:
+        return False
+    return bool(kinds & {"dft", "hf"})
+
+
+def suggested_resources(backend_spec: str) -> dict[str, object]:
+    """Partition and shape for a chain, when the caller has not chosen.
+
+    Quantum chemistry gets cores and memory instead of a GPU; ORCA's own
+    guidance is roughly 2-4 GB per core, and more cores past about eight buy
+    progressively less for a molecule this size.
+    """
+    if wants_cpu_only(backend_spec):
+        return {"partition": "cpu", "gpus": 0, "cpus": 8, "memory": "32G",
+                "walltime": "04:00:00"}
+    return {}
+
+
 @dataclass
 class SlurmConfig:
     """Resources and placement for one submission."""

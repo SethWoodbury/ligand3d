@@ -701,6 +701,9 @@ def backend_catalog() -> list[dict[str, Any]]:
             {
                 "id": caps.name,
                 "kind": caps.kind,
+                # The functional and basis, where the backend has one, so the
+                # menu can say what will run rather than only which id.
+                "level": getattr(getattr(backend, "method", None), "keywords", None),
                 "description": caps.description,
                 "takes_charge": caps.takes_charge,
                 "supports_solvation": caps.supports_solvation,

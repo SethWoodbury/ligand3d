@@ -67,6 +67,9 @@ class Method:
     """What goes on ORCA's keyword line, minus ENGRAD and solvation."""
     summary: str
     rung: str
+    kind: str = "dft"
+    """Almost all of these are DFT. HF-3c is not: it is Hartree-Fock, with no
+    functional at all, and calling it DFT would be simply wrong."""
     """Where it sits: composite, GGA, meta-GGA, hybrid, range-separated."""
     min_orca: tuple[int, int] = (4, 1)
     """Oldest ORCA that knows these keywords.
@@ -88,8 +91,9 @@ class Method:
 #: cheaper than assembling the parts by hand.
 METHODS: tuple[Method, ...] = (
     Method("orca-hf3c", "HF-3c",
-           "HF-3c: Hartree-Fock, minimal basis, three corrections. The cheapest "
-           "thing here — a sanity geometry, not energetics.", "composite"),
+           "HF-3c: Hartree-Fock, minimal basis, three corrections. Not DFT — "
+           "there is no functional. The cheapest thing here: a sanity geometry, "
+           "not energetics.", "composite", kind="hf"),
     Method("orca-pbeh3c", "PBEh-3c",
            "PBEh-3c: hybrid GGA composite on def2-mSVP. Good geometries, modest "
            "cost.", "composite"),
@@ -398,7 +402,7 @@ def _make_backend(method: Method, name: str | None = None) -> type[OrcaBackend]:
             "method": method,
             "caps": Capabilities(
                 name=name or method.alias,
-                kind="dft",
+                kind=method.kind,
                 description=f"{method.summary} Charge- and spin-aware, CPCM solvent.",
                 takes_charge=True,
                 supports_solvation=True,

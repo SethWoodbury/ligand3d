@@ -556,12 +556,15 @@
               <div class="note" id="whereTag" style="margin:.35rem 0 0"></div>
             </div>
           </div>
+          <div class="note" id="partitionWhy" hidden style="margin:.3rem 0"></div>
           <div class="row three" id="slurmOpts" hidden>
             <div>
               <label for="slurm_partition">Partition</label>
               <select id="slurm_partition">
                 <option value="gpu">gpu</option>
                 <option value="gpu-bf">gpu-bf (backfill)</option>
+                <option value="cpu">cpu &mdash; for DFT</option>
+                <option value="cpu-bf">cpu-bf (backfill)</option>
               </select>
             </div>
             <div>
@@ -1354,6 +1357,31 @@ function collectSettings() {
 
 /* Where a build runs. Three options, each hidden unless it would work here, so
    nothing is offered that could only fail. */
+// ORCA is CPU-parallel and gets nothing from a GPU, so a DFT chain should not
+// queue for one. Moves the selection once, and then leaves it alone — if you
+// have picked a partition yourself, that is an answer, not a placeholder.
+let partitionTouched = false;
+
+function steerPartition() {
+  const select = el("slurm_partition");
+  if (!select || partitionTouched) return;
+  const chain = (el("backend").value || "").split(",").map((s) => s.trim());
+  const byId = new Map((backends || []).map((b) => [b.id, b]));
+  const kinds = new Set(chain.map((n) => (byId.get(n) || {}).kind).filter(Boolean));
+  if (kinds.has("mlff")) return;                       // wants the GPU
+  const quantum = kinds.has("dft") || kinds.has("hf");
+  select.value = quantum ? "cpu" : select.value;
+  const gpu = el("slurm_gpu");
+  if (gpu) gpu.disabled = quantum;                     // no GRES on a cpu node
+  const why = el("partitionWhy");
+  if (why) {
+    why.textContent = quantum
+      ? "ORCA is CPU-parallel — a GPU would sit idle, so this goes to the cpu partition."
+      : "";
+    why.hidden = !quantum;
+  }
+}
+
 function whereValue() {
   const select = el("runWhere");
   return select ? select.value : "local";
@@ -1386,12 +1414,17 @@ function setupSlurm(status) {
   el("runWhere").innerHTML = options.join("");
   el("slurmBox").hidden = false;
 
+  const partitionSelect = el("slurm_partition");
+  if (partitionSelect)
+    partitionSelect.addEventListener("change", () => { partitionTouched = true; });
+
   el("runWhere").addEventListener("change", () => {
     el("slurmOpts").hidden = whereValue() !== "slurm";
     populateBackends(CONFIG);   // greying depends on where it will run
     slurmAdvice();
   });
-  el("backend").addEventListener("change", slurmAdvice);
+  el("backend").addEventListener("change", () => { slurmAdvice(); steerPartition(); });
+  steerPartition();
   slurmAdvice();
 }
 
@@ -1705,22 +1738,30 @@ function populateBackends(cfg) {
   // Keyed by the `kind` each backend declares, so a new kind gets its own
   // heading instead of silently landing under "force fields" — which is how
   // ORCA, a quantum chemistry package, spent a while being labelled one.
-  const groups = { semiempirical: [], mlff: [], dft: [], ff: [] };
+  const groups = { semiempirical: [], mlff: [], dft: [], hf: [], ff: [] };
   backends.filter(usable).forEach((b) => {
     if (b.id === "mmff94" || b.id === "uff") return;
     const via = !b.ready ? " (in a container)" : "";
+    // "mmff94 -> orca" said nothing about what would actually run. Where the
+    // backend knows its level of theory, show that instead: the whole point of
+    // naming methods separately is that the choice is visible.
+    const label = b.level ? b.id + " \u2014 " + b.level : b.id;
     (groups[b.kind] || groups.ff).push(
-      '<option value="mmff94,' + b.id + '">mmff94 -&gt; ' + b.id + via + "</option>");
+      '<option value="mmff94,' + b.id + '">mmff94 -&gt; ' + label + via + "</option>");
   });
   if (groups.semiempirical.length)
     options.push('<optgroup label="semi-empirical">' + groups.semiempirical.join("") + "</optgroup>");
   if (groups.mlff.length)
     options.push('<optgroup label="machine-learned">' + groups.mlff.join("") + "</optgroup>");
   if (groups.dft.length)
-    options.push('<optgroup label="DFT (quantum chemistry) - minutes to hours">' +
+    options.push('<optgroup label="DFT (ORCA) - minutes to hours">' +
                  groups.dft.join("") + "</optgroup>");
+  if (groups.hf.length)
+    options.push('<optgroup label="Hartree-Fock (ORCA) - no functional">' +
+                 groups.hf.join("") + "</optgroup>");
   if (groups.ff.length)
-    options.push('<optgroup label="other force fields">' + groups.ff.join("") + "</optgroup>");
+    options.push('<optgroup label="force fields - GFN-FF is quantum-derived, not classical">' +
+                 groups.ff.join("") + "</optgroup>");
   const missing = backends.filter((b) => !usable(b));
   if (missing.length)
     options.push('<optgroup label="not available here">' + missing.map((b) =>

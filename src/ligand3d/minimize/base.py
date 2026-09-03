@@ -20,7 +20,11 @@ from rdkit import Chem
 
 from ..errors import BackendMismatch, BackendUnavailable
 
-BackendKind = Literal["ff", "semiempirical", "mlff", "dft"]
+#: "hf" is separate from "dft" because HF-3c is Hartree-Fock — a wavefunction
+#: method with no exchange-correlation functional at all. Filing it under DFT
+#: put a plainly wrong label on a result, which is the one thing a method name
+#: exists to prevent.
+BackendKind = Literal["ff", "semiempirical", "mlff", "dft", "hf"]
 
 # Elements covered by the organic-chemistry MLFFs, as trained.
 ORGANIC_ELEMENTS = frozenset({1, 6, 7, 8, 9, 15, 16, 17, 35, 53})
