@@ -18,7 +18,7 @@ import sys
 REQUIRED_BACKENDS = ("mmff94", "uff", "gfn1", "gfn2")
 #: GFN-FF runs through the standalone xtb binary rather than tblite, so it
 #: is reported but not required — an image without it is still useful.
-OPTIONAL_BACKENDS = ("gfnff",)
+OPTIONAL_BACKENDS = ("gfnff", "gxtb")
 
 #: The one thing that differs between the images. Without this the check is
 #: family-blind: a mace image whose torch stack failed to resolve passes every

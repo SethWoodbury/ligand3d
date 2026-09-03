@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ligand3d"
-version = "0.1.0"
+version = "0.2.0"
 description = "Turn a 2D molecule into a minimized 3D structure"
 readme = "README.md"
 license = { text = "MIT" }

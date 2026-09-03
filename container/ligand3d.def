@@ -62,7 +62,7 @@ From: python:3.12-slim-trixie
     # fetch" and named nothing.
     apt-get update
     apt-get install -y --no-install-recommends libgomp1 default-jre-headless \
-        libxrender1 libx11-6 libxext6 libexpat1
+        libxrender1 libx11-6 libxext6 libexpat1 curl xz-utils
     apt-get install -y --no-install-recommends xtb || echo "no xtb package; GFN-FF will be unavailable"
     apt-get clean
     rm -rf /var/lib/apt/lists/*
@@ -86,6 +86,24 @@ From: python:3.12-slim-trixie
         pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
     fi
     pip install --no-cache-dir "/opt/ligand3d-src[$extras]"
+
+    # g-xTB, from the Grimme group's own patched xtb build — the stock binary
+    # has no --gxtb. It is the only thing here that reaches for hybrid-DFT
+    # accuracy while still finishing in a second, so it is worth the 40 MB.
+    # A development release: the authors say so, and the final implementation
+    # is going into tblite. Pinned, and the published sha256 is checked, since
+    # a silently different binary is worse than a missing one.
+    GXTB_URL="https://github.com/grimme-lab/g-xtb/releases/download/v2.0.1/xtb-6.7.1-gxtb-140526-linux-x86_64.tar.xz"
+    GXTB_SHA="cdfb81164f8d3300fc451dbbf2414528b533e71f7a30ec824b564cd30d6d9e5c"
+    if curl -fsSL "$GXTB_URL" -o /tmp/gxtb.tar.xz; then
+        echo "$GXTB_SHA  /tmp/gxtb.tar.xz" | sha256sum -c - \
+            && mkdir -p /opt/gxtb \
+            && tar xf /tmp/gxtb.tar.xz -C /opt/gxtb --strip-components=1 \
+            || echo "g-xtb checksum failed; skipping"
+        rm -f /tmp/gxtb.tar.xz
+    else
+        echo "could not fetch g-xtb; it will be unavailable"
+    fi
 
     # MACE-POLAR-1's checkpoints reference graph_longrange when torch unpickles
     # them, but mace-torch only soft-imports it and does not depend on it, so

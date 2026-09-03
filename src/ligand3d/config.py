@@ -463,6 +463,19 @@ def resolve_xtb() -> Resolution:
     return resolve_binary("xtb", _XTB_PROBE)
 
 
+#: g-xTB ships as its own patched xtb build — the stock binary has no --gxtb —
+#: so it is resolved separately rather than assumed to be the xtb on PATH.
+_GXTB_PROBE = [
+    Path("/opt/gxtb/bin/xtb"),  # where the container puts it
+    Path("/net/software/xtb/gxtb/bin/xtb"),
+    Path.home() / ".local/share/ligand3d/gxtb/bin/xtb",
+]
+
+
+def resolve_gxtb() -> Resolution:
+    return resolve_binary("gxtb", _GXTB_PROBE)
+
+
 def resolve_crest() -> Resolution:
     return resolve_binary("crest", _CREST_PROBE)
 
@@ -499,6 +512,11 @@ def find_xtb_binary() -> str | None:
     r = resolve_xtb()
     return str(r.path) if r.path else None
 
+
+
+def find_gxtb_binary() -> str | None:
+    r = resolve_gxtb()
+    return str(r.path) if r.path else None
 
 def find_crest_binary() -> str | None:
     r = resolve_crest()

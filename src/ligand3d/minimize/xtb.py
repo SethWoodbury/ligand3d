@@ -68,7 +68,16 @@ class TBLiteBackend(ASEBackend):
 
 
 class XTBBinaryBackend:
-    """GFN-FF through the xtb executable, using xtb's own optimizer."""
+    """A method run through the xtb executable, using xtb's own optimizer.
+
+    Two live here because both need the program rather than the tblite
+    library: GFN-FF, which exists only in xtb, and g-xTB, which ships as its
+    own patched xtb build.
+    """
+
+    #: The xtb flag selecting the method, and how to find the binary.
+    flag = "--gfnff"
+    binary_finder = "find_xtb_binary"
 
     def __init__(self) -> None:
         self.caps = Capabilities(
@@ -84,16 +93,16 @@ class XTBBinaryBackend:
         )
 
     def _binary(self) -> str | None:
-        from ..config import find_xtb_binary
+        from .. import config
 
-        return find_xtb_binary()
+        return getattr(config, self.binary_finder)()
 
     def available(self) -> Availability:
         binary = self._binary()
         if binary is None:
             return Availability(
                 ok=False,
-                reason="xtb executable not found",
+                reason=f"{self.caps.name} executable not found",
                 hint=(
                     "Set LIGAND3D_XTB_BIN to an xtb binary, put xtb on PATH, or download "
                     "one from https://github.com/grimme-lab/xtb/releases"
@@ -115,7 +124,7 @@ class XTBBinaryBackend:
             cmd = [
                 binary,
                 xyz.name,
-                "--gfnff",
+                self.flag,
                 "--opt",
                 "--chrg", str(job.charge),
                 "--uhf", str(job.multiplicity - 1),
@@ -229,3 +238,57 @@ register(
     aliases=("gfn1-xtb",),
 )
 register("gfnff", XTBBinaryBackend, aliases=("gfn-ff",))
+
+
+class GXTBBackend(XTBBinaryBackend):
+    """g-xTB, through the patched xtb build that carries it.
+
+    A 2026 method from the Grimme group that aims at hybrid-DFT quality — it
+    targets wB97M-V/def2-TZVPPD — at a semi-empirical price. That makes it the
+    most accurate thing here that still finishes in seconds rather than
+    minutes, and a genuinely different point on the cost curve from GFN2.
+
+    It is a *development* version: the authors say so, the final implementation
+    is going into tblite, and results may move between releases. Fine for a
+    geometry, worth a second thought before it goes in a paper.
+
+    Stock xtb has no --gxtb, so this needs the build from
+    https://github.com/grimme-lab/g-xtb/releases and its own resolver.
+    """
+
+    flag = "--gxtb"
+    binary_finder = "find_gxtb_binary"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.caps = Capabilities(
+            name="gxtb",
+            kind="semiempirical",
+            description=(
+                "g-xTB (beta): semi-empirical aiming at hybrid-DFT accuracy. "
+                "Seconds, charge-aware. A development release — results may "
+                "shift between versions."
+            ),
+            takes_charge=True,
+            # Measured, not assumed: --gxtb with --alpb aborts with "fatal
+            # error". Charge alone is fine. Declaring it here keeps the
+            # pipeline from adding a solvent model this method cannot run,
+            # which is what turned a charged molecule into an opaque
+            # "abnormal termination of xtb".
+            supports_solvation=False,
+            elements=None,
+            requires=(),
+            energy_unit="kcal/mol",
+            energy_kind="total",
+        )
+
+    def install_hint(self) -> str:
+        return (
+            "g-xTB ships as its own patched xtb build; the stock binary has no "
+            "--gxtb. Download it from "
+            "https://github.com/grimme-lab/g-xtb/releases, then set "
+            "LIGAND3D_GXTB_BIN to the xtb inside it."
+        )
+
+
+register("gxtb", GXTBBackend, aliases=("g-xtb",))

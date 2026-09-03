@@ -97,6 +97,93 @@ _CLASSICAL: dict[str, dict[str, Any]] = {
         training="GFN-FF, parameterized across the periodic table",
         notes="runs in the xtb binary, which optimizes internally, so it cannot be traced.",
     ),
+    "gxtb": dict(
+        family="semi-empirical, hybrid-DFT target (xtb binary)",
+        charge="explicit",
+        speed="0.11 s",
+        measured=True,
+        memory="~300 MB",
+        accuracy="aims at hybrid-DFT quality at a semi-empirical price",
+        training="g-xTB, fit to reproduce wB97M-V/def2-TZVPPD",
+        notes=(
+            "beta: a development release, and the authors say results may shift "
+            "between versions. No implicit solvent — --gxtb with --alpb aborts. "
+            "Needs the patched xtb build from grimme-lab/g-xtb; the stock binary "
+            "has no --gxtb. Runs in the binary, so it cannot be traced."
+        ),
+    ),
+    "orca-hf3c": dict(
+        family="DFT: minimal basis Hartree-Fock with three corrections",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="a sanity geometry; not for energetics",
+        training="HF-3c",
+        notes="level of theory is HF-3c; minutes to hours, not seconds.",
+    ),
+    "orca-pbeh3c": dict(
+        family="DFT: hybrid GGA composite, def2-mSVP",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="good geometries at modest cost",
+        training="PBEh-3c",
+        notes="level of theory is PBEh-3c; minutes to hours, not seconds.",
+    ),
+    "orca-b973c": dict(
+        family="DFT: GGA composite, triple-zeta, built for geometries",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="the default and the right first choice",
+        training="B97-3c",
+        notes="level of theory is B97-3c; minutes to hours, not seconds.",
+    ),
+    "orca-r2scan3c": dict(
+        family="DFT: meta-GGA composite",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="better than B97-3c on non-covalent interactions; needs ORCA 5+",
+        training="r2SCAN-3c",
+        notes="level of theory is r2SCAN-3c; minutes to hours, not seconds.",
+    ),
+    "orca-bp86": dict(
+        family="DFT: plain GGA",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="the reference point for what a composite buys you",
+        training="BP86/def2-SVP D3(BJ)",
+        notes="level of theory is BP86/def2-SVP D3(BJ); minutes to hours, not seconds.",
+    ),
+    "orca-tpss": dict(
+        family="DFT: meta-GGA",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="a step up from the composites",
+        training="TPSS/def2-TZVP D3(BJ)",
+        notes="level of theory is TPSS/def2-TZVP D3(BJ); minutes to hours, not seconds.",
+    ),
+    "orca-b3lyp": dict(
+        family="DFT: hybrid",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="what most published organic geometries used",
+        training="B3LYP/def2-TZVP D3(BJ)",
+        notes="level of theory is B3LYP/def2-TZVP D3(BJ); minutes to hours, not seconds.",
+    ),
+    "orca-pbe0": dict(
+        family="DFT: parameter-free hybrid",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="generally better behaved than B3LYP",
+        training="PBE0/def2-TZVP D3(BJ)",
+        notes="level of theory is PBE0/def2-TZVP D3(BJ); minutes to hours, not seconds.",
+    ),
+    "orca-wb97x": dict(
+        family="DFT: range-separated hybrid",
+        charge="explicit",
+        solvent="CPCM",
+        accuracy="among the most accurate here, and priced accordingly",
+        training="wB97X-D3/def2-TZVP",
+        notes="level of theory is wB97X-D3/def2-TZVP; minutes to hours, not seconds.",
+    ),
     "gfn1": dict(
         family="semi-empirical tight binding",
         charge="explicit",
@@ -164,6 +251,47 @@ _ACCURACY: dict[str, tuple[str, str]] = {
         "GFN2-xTB geometries",
         "heavy-atom RMSD typically ~0.1-0.3 A against DFT for organics; "
         "energetics much rougher than its geometries",
+    ),
+    "gxtb": (
+        "wB97M-V/def2-TZVPPD, which it is fit to reproduce",
+        "aims at hybrid-DFT accuracy at semi-empirical cost. A development "
+        "release — treat numbers as provisional",
+    ),
+    "orca-hf3c": (
+        "HF-3c",
+        "a sanity geometry; not for energetics",
+    ),
+    "orca-pbeh3c": (
+        "PBEh-3c",
+        "good geometries at modest cost",
+    ),
+    "orca-b973c": (
+        "B97-3c",
+        "the default and the right first choice",
+    ),
+    "orca-r2scan3c": (
+        "r2SCAN-3c",
+        "better than B97-3c on non-covalent interactions; needs ORCA 5+",
+    ),
+    "orca-bp86": (
+        "BP86/def2-SVP D3(BJ)",
+        "the reference point for what a composite buys you",
+    ),
+    "orca-tpss": (
+        "TPSS/def2-TZVP D3(BJ)",
+        "a step up from the composites",
+    ),
+    "orca-b3lyp": (
+        "B3LYP/def2-TZVP D3(BJ)",
+        "what most published organic geometries used",
+    ),
+    "orca-pbe0": (
+        "PBE0/def2-TZVP D3(BJ)",
+        "generally better behaved than B3LYP",
+    ),
+    "orca-wb97x": (
+        "wB97X-D3/def2-TZVP",
+        "among the most accurate here, and priced accordingly",
     ),
     "gfn1": (
         "DFT reference data (the GFN1 fit set)",
