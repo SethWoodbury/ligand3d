@@ -133,6 +133,11 @@
   .pane[data-active="true"] { display: block; }
 
   label { display: block; font-size: .76rem; font-weight: 620; margin-bottom: .22rem; }
+  /* The browser's own [hidden] rule is in the user-agent sheet, which any
+     author rule outranks — so `.row { display: grid }` was quietly overriding
+     it and the SLURM options showed even when hidden. Anything toggled by the
+     `hidden` attribute needs this to be reliable. */
+  [hidden] { display: none !important; }
   .row { display: grid; gap: .5rem; margin-bottom: .55rem; }
   .row.two { grid-template-columns: 1fr 1fr; }
   .row.three { grid-template-columns: 1fr 1fr 1fr; }
@@ -525,6 +530,16 @@
         <div id="familySwitch" hidden style="margin:.35rem 0 .2rem">
           <button type="button" id="switchFamily" class="ghost"></button>
           <span class="note" id="switchState"></span>
+        </div>
+        <div id="switchConfirm" hidden
+             style="margin:.35rem 0 .5rem;padding:.55rem .65rem;border:1px solid var(--line);border-radius:.4rem">
+          <div class="note" id="switchConfirmText" style="margin:0 0 .45rem"></div>
+          <div class="note" id="switchCarry" hidden style="margin:0 0 .45rem">
+            Your drawing is carried over. If anything goes wrong, this is it as SMILES:
+            <code id="switchSmiles" style="user-select:all"></code>
+          </div>
+          <button type="button" id="switchGo">Restart in the other image</button>
+          <button type="button" id="switchCancel" class="ghost">Cancel</button>
         </div>
         <div class="note" id="slurmWhy" hidden style="margin:.4rem 0 .2rem"></div>
 
@@ -1837,12 +1852,50 @@ async function init() {
         "could not load the method list; mmff94 still works";
     });
 
+  // Carried across the restart in sessionStorage: it survives a reload, is
+  // scoped to this tab, and goes away when the tab does — which is the right
+  // lifetime for "what I was drawing a moment ago".
+  const CARRY_KEY = "ligand3d.switch.molblock";
+
   const switchButton = el("switchFamily");
   if (switchButton)
     switchButton.addEventListener("click", async () => {
       const family = switchButton.dataset.family;
-      switchButton.disabled = true;
-      el("switchState").textContent = "restarting in the " + family + " image \u2026";
+      const molblock = await readMolblock();
+      const smiles = (engineName === "jsme" && jsmeApplet && jsmeApplet.smiles()) || "";
+
+      el("switchConfirmText").innerHTML =
+        "This restarts the session in the <b>" + family + "</b> image. It takes " +
+        "about a minute, and anything still building is lost \u2014 the two families " +
+        "cannot share a process, so there is no way to do it without a restart.";
+      const carry = el("switchCarry");
+      if (molblock && molblock.trim()) {
+        try { sessionStorage.setItem(CARRY_KEY, molblock); } catch (e) { /* private mode */ }
+        el("switchSmiles").textContent = smiles || "(molfile kept)";
+        carry.hidden = false;
+      } else {
+        try { sessionStorage.removeItem(CARRY_KEY); } catch (e) {}
+        carry.hidden = true;
+      }
+      el("switchConfirm").hidden = false;
+      el("familySwitch").hidden = true;
+    });
+
+  const switchCancel = el("switchCancel");
+  if (switchCancel)
+    switchCancel.addEventListener("click", () => {
+      el("switchConfirm").hidden = true;
+      el("familySwitch").hidden = false;
+      try { sessionStorage.removeItem(CARRY_KEY); } catch (e) {}
+    });
+
+  const switchGo = el("switchGo");
+  if (switchGo)
+    switchGo.addEventListener("click", async () => {
+      const family = el("switchFamily").dataset.family;
+      switchGo.disabled = true;
+      el("switchCancel").disabled = true;
+      el("switchConfirmText").textContent = "restarting in the " + family + " image \u2026";
       try {
         await fetch("/api/switch-family", {
           method: "POST",
@@ -1860,12 +1913,39 @@ async function init() {
         } catch (e) { /* still down */ }
         if (Date.now() < deadline) setTimeout(poll, 1000);
         else {
-          el("switchState").textContent = "it did not come back \u2014 check the terminal";
-          switchButton.disabled = false;
+          el("switchConfirmText").textContent =
+            "it did not come back \u2014 check the terminal. Your drawing is still here.";
+          switchGo.disabled = false;
+          el("switchCancel").disabled = false;
         }
       };
       setTimeout(poll, 2500);
     });
+
+  // Put the drawing back after the restart. Deliberately consumed on read, so
+  // a later manual reload does not resurrect a molecule you have moved on from.
+  const carried = (() => {
+    try {
+      const v = sessionStorage.getItem(CARRY_KEY);
+      if (v) sessionStorage.removeItem(CARRY_KEY);
+      return v;
+    } catch (e) { return null; }
+  })();
+  // The editor may not exist yet. jsmeOnLoad fires when it does, so the
+  // restore is parked there; the paste-box fallback needs no wait.
+  if (carried) {
+    if (engineName === "jsme" && !jsmeApplet) {
+      const previous = window.jsmeOnLoad;
+      window.jsmeOnLoad = function () {
+        if (previous) previous.apply(this, arguments);
+        loadIntoEditor(carried, "");
+        logLine("carried your drawing over from the previous image", "ok");
+      };
+    } else {
+      loadIntoEditor(carried, "");
+      logLine("carried your drawing over from the previous image", "ok");
+    }
+  }
 
   fetch("/api/templates")
     .then((r) => r.json())
