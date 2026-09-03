@@ -36,7 +36,7 @@ xtb = ["tblite>=0.4", "ase>=3.22"]
 # NOTE: [mace] and [fairchem] CANNOT share an environment. mace-torch pins
 # e3nn==0.4.4 and fairchem-core requires e3nn>=0.5. Install them in separate
 # virtualenvs; `ligand3d doctor` detects the clash and says so.
-mace = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]
+mace = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.16"]
 # fairchem-core supports only 3.11-3.13, while ligand3d itself runs on 3.10+.
 # Without the marker, resolving this extra fails on 3.10 rather than simply
 # leaving the backend unavailable there.
@@ -46,7 +46,7 @@ fairchem = [
     "fairchem-core>=2.20; python_version >= '3.11' and python_version < '3.14'",
 ]
 aimnet = ["ase>=3.22", "torch>=2.0"]
-mlff = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.9"]  # alias for [mace]
+mlff = ["ase>=3.22", "torch>=2.0", "mace-torch>=0.3.16"]  # alias for [mace]
 protonation = ["dimorphite-dl>=2.0"]
 # Offline IUPAC name parsing for `ligand3d fetch` and the sketcher's import box.
 # py2opsin is a thin wrapper that ships the OPSIN jar and shells out to `java`,
@@ -58,7 +58,7 @@ all = [
     "tblite>=0.4",
     "ase>=3.22",
     "torch>=2.0",
-    "mace-torch>=0.3.9",
+    "mace-torch>=0.3.16",
     "dimorphite-dl>=2.0",
     "py2opsin>=1.2",
 ]

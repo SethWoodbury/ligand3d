@@ -1,22 +1,31 @@
 # ligand3d
 
-Turn a 2D molecule into a minimized 3D structure.
+**Turn a 2D molecule into a minimized 3D structure.** A SMILES string, a name, a
+MOL/SDF file, or something you draw in the browser goes in; a 3D conformer comes out,
+minimized at the level of theory you pick, with its stereochemistry verified rather than
+assumed. It writes mmCIF by default, because that carries the bond orders and formal
+charges PDB cannot — plus SDF, PDB, a Rosetta params set, or an annotated CIF for
+RFdiffusion4.
 
-You give it a SMILES string, a MOL/SDF file, or a structure you drew in the browser.
-It builds a 3D conformer, optionally sets the protonation state, minimizes with the
-level of theory you choose, optionally searches conformers, and writes mmCIF, SDF, PDB,
-a Rosetta params set, or an annotated CIF for RFdiffusion4 — mmCIF by default, because it
-carries the bond orders and formal charges PDB cannot.
+```mermaid
+flowchart LR
+  A["SMILES · name<br/>MOL/SDF · sketch"] --> B["embed<br/><small>ETKDGv3</small>"]
+  B --> C["protonate<br/><small>pH, optional</small>"]
+  C --> D["minimize<br/><small>chain of methods</small>"]
+  D --> E["verify<br/><small>CIP · connectivity</small>"]
+  E --> F["mmCIF · SDF · PDB<br/>Rosetta params<br/>annotated CIF"]
+  style A fill:#e8f0fe,stroke:#4285f4,color:#000
+  style D fill:#fce8e6,stroke:#ea4335,color:#000
+  style F fill:#e6f4ea,stroke:#34a853,color:#000
+```
 
 ```bash
 ligand3d build "O=C1CN2CCC1CC2" -o quinuclidinone          # writes .cif + .sdf
-ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --backend gfn2 -o gabapentin
-ligand3d build "C[C@@H](O)[C@H](N)C(=O)O" --backend mmff94,gfn2 --confs 20 -o threonine
-ligand3d build "<smiles>" --params --params-code LIG        # + a Rosetta params file
-ligand3d build "<smiles>" --trajectory                      # save the geometry at every step
-ligand3d fetch "3-Cyano-7-ethoxycoumarin"  # look a molecule up by name
-ligand3d sketch                        # draw it, then the pipeline runs on what you drew
-ligand3d doctor                        # what's installed, what isn't, and why
+ligand3d build "NCC1(CC(=O)O)CCCCC1" --ph 7.4 -b gfn2 -o gabapentin
+ligand3d build "<smiles>" -b mmff94,gfn2,orca-b973c        # cheap, then narrow, then DFT
+ligand3d fetch "3-Cyano-7-ethoxycoumarin"                  # look it up by name
+ligand3d sketch                                            # draw it in a browser
+ligand3d doctor                                            # what is available, and why
 ```
 
 Every stage is also its own command, so a script can run one step at a time:
@@ -25,13 +34,28 @@ Every stage is also its own command, so a script can run one step at a time:
 ligand3d stereo     "C[C@@H](O)[C@H](N)C(=O)O"   # report R/S and E/Z, build nothing
 ligand3d protonate  "NCC1(CC(=O)O)CCCCC1" --ph 7.4 --all
 ligand3d embed      "<smiles>" -o raw            # 2D -> 3D, no minimization
-ligand3d minimize   raw.sdf -o min --backend gfn2
+ligand3d minimize   raw.sdf -o min -b gfn2
 ligand3d conformers "<smiles>" -n 50 -o ensemble
 ligand3d params     ensemble.sdf --code LIG
 ligand3d convert    min.cif min.pdb
 ```
 
 ## Quickstart
+
+Two situations, and they are genuinely different: at the IPD everything is already on
+`/net`, and everywhere else you install what you need.
+
+```mermaid
+flowchart TD
+  Q{"Are you at the IPD,<br/>on digs?"}
+  Q -->|yes| I["one PATH line<br/><small>containers + weights already on /net</small>"]
+  Q -->|no| E["clone + uv<br/><small>pick your own methods</small>"]
+  I --> R["ligand3d sketch"]
+  E --> R
+  style I fill:#e6f4ea,stroke:#34a853,color:#000
+  style E fill:#e8f0fe,stroke:#4285f4,color:#000
+  style R fill:#fef7e0,stroke:#fbbc04,color:#000
+```
 
 ### At the IPD, on digs — nothing to install
 
@@ -50,6 +74,11 @@ That is the whole setup — no clone, no venv, no `module load`. `/net` and `/ho
 automounted on every node, so the same line works from a login node or a compute node, and
 your labmates can use it by adding the same line.
 
+**The weights are already there too.** `HF_HOME` points at the lab's model registry, so
+every MACE, eSEN, UMA and AllScAIP checkpoint is on disk and shared — nothing downloads,
+and 18 GB is stored once rather than once per person. The registry documents itself at
+`/net/databases/huggingface/mlFF_models/README.md`.
+
 **To open the sketcher over SSH, forward the port.** The server binds `127.0.0.1` and
 never listens on an external interface, so a tunnel is the only way to reach it. The port
 is stable at 8765, so the same tunnel works every session:
@@ -58,24 +87,16 @@ is stable at 8765, so the same tunnel works every session:
 # on digs
 $ ligand3d sketch
 ligand3d sketcher (jsme) running at http://127.0.0.1:8765/
-draw, set the options, and press Build. Ctrl-C to stop.
   to reach it from your machine, run this locally first:
     ssh -N -L 8765:127.0.0.1:8765 <the node it names>
-  then open http://127.0.0.1:8765/ there.
 ```
 
 Copy that `ssh` line into a second terminal **on your laptop** — `sketch` has already
-filled in the node's real hostname — then open <http://127.0.0.1:8765/> in your browser.
-Leave the `ssh -N` running; it is the tunnel.
+filled in the node's real hostname — then open <http://127.0.0.1:8765/>. Leave the
+`ssh -N` running; it is the tunnel. At a machine with its own display, `sketch` just opens
+a browser and none of this applies.
 
-At a machine that has a browser and a display, `ligand3d sketch` just opens one and none
-of this applies.
-
-Bare `sketch` starts in the richest image present, because the backend is chosen in the
-browser *after* the image has been picked — so you get 18 backends rather than the core
-image's 6. `sketch -b esen` starts on the fairchem side instead.
-
-### Anywhere else, or to work on the code
+### Anywhere else
 
 ```bash
 git clone git@github.com:SethWoodbury/ligand3d && cd ligand3d
@@ -83,10 +104,25 @@ uv venv && uv pip install -e ".[xtb,protonation,names]"
 uv run ligand3d sketch
 ```
 
-Add `,mace` **or** `,fairchem` for the neural potentials — not both; see
-[the split](#the-mace--fairchem-split--read-this-before-installing). Working from a
-checkout is also the only way to use `--slurm`, which needs `sbatch` and cannot run from
-inside a container.
+That gives you MMFF94, UFF, GFN1/GFN2-xTB, pH-based protonation and offline name lookup —
+enough for most ligand work, with no compiler, no conda and no GPU. What to add beyond it
+depends on what you are doing:
+
+| You want | Install | Then |
+|---|---|---|
+| **Neural potentials, MACE family** | `uv pip install torch --index-url https://download.pytorch.org/whl/cpu` then `-e ".[mace]"` | weights download themselves on first use, into `~/.cache/huggingface` |
+| **Neural potentials, fairchem family** | same torch line, then `-e ".[fairchem]"` | eSEN and AllScAIP are gated on Hugging Face — accept the licence, then `huggingface-cli login` |
+| **MACE-POLAR** (long-range electrostatics) | `.[mace]`, plus `uv pip install --no-deps git+https://github.com/WillBaldwin0/graph_electrostatics.git@v0.4.0` | weights from [ACEsuit/mace-foundations](https://github.com/ACEsuit/mace-foundations/releases/tag/mace_polar_1) — GitHub, not HF |
+| **GFN-FF** | the `xtb` binary from [grimme-lab/xtb](https://github.com/grimme-lab/xtb/releases), or `apt install xtb` | `LIGAND3D_XTB_BIN=/path/to/xtb` if it is not on PATH |
+| **g-xTB** (beta) | the patched build from [grimme-lab/g-xtb](https://github.com/grimme-lab/g-xtb/releases) — stock xtb has no `--gxtb` | `LIGAND3D_GXTB_BIN=/path/to/xtb` |
+| **DFT** | [ORCA](https://orcaforum.kofo.mpg.de), free for academic use, needs a forum account | `LIGAND3D_ORCA_BIN=/path/to/orca` |
+
+`[mace]` and `[fairchem]` **cannot coexist** — see
+[the split](#the-mace--fairchem-split--read-this-before-installing). Pick one, or use two
+environments, or use the containers, which are built one per family for exactly this reason.
+
+`ligand3d doctor` tells you what is missing and the command to fix it, so you do not have
+to work the table backwards.
 
 ## Why this exists
 
@@ -231,10 +267,54 @@ uv venv && uv pip install -e ".[xtb,protonation,names]"
 | `mmff94` | classical FF | implicit in typing | no | 4 ms |
 | `uff` | classical FF | implicit in typing | no | 4 ms |
 | `gfnff` | generic FF (xtb) | yes | ALPB | 0.06 s |
+| `gxtb` | semi-empirical, **beta** | yes | **no** | 0.11 s |
 | `gfn2` | semi-empirical | yes | ALPB | 0.33 s |
 | `gfn1` | semi-empirical | yes | ALPB | 0.57 s |
 | ML potentials | see below | varies | no | 0.5 s to a minute |
-| `orca` | DFT | yes (+ spin) | CPCM | 25 s for methanol, and it climbs steeply |
+| `orca-*` | DFT, nine levels | yes (+ spin) | CPCM | 25 s for methanol, climbing steeply |
+
+```mermaid
+flowchart LR
+  subgraph cheap["milliseconds"]
+    A["mmff94 · uff"]
+  end
+  subgraph mid["a second or less"]
+    B["gfnff"] --> C["gxtb <sub>beta</sub>"] --> D["gfn1 · gfn2"]
+  end
+  subgraph ml["seconds to a minute"]
+    E["MACE · MACE-POLAR"]
+    F["eSEN · UMA · AllScAIP"]
+  end
+  subgraph dft["minutes to hours"]
+    G["orca-b973c ... orca-wb97x"]
+  end
+  cheap --> mid --> ml --> dft
+  style cheap fill:#e6f4ea,stroke:#34a853,color:#000
+  style mid fill:#fef7e0,stroke:#fbbc04,color:#000
+  style ml fill:#e8f0fe,stroke:#4285f4,color:#000
+  style dft fill:#fce8e6,stroke:#ea4335,color:#000
+```
+
+### xtb, GFN-FF, GFN2, g-xTB — which is which
+
+`xtb` is a *program*, not a method, and it carries several. They are not
+interchangeable:
+
+- **GFN-FF** (`gfnff`) is a force field. No electrons, fast, parameterised across the
+  periodic table. Good geometries for what it costs.
+- **GFN1/GFN2-xTB** (`gfn1`, `gfn2`) are semi-empirical tight binding — approximate
+  quantum mechanics. `xtb` is an alias for `gfn2`, which is the one you usually want.
+- **g-xTB** (`gxtb`) is new, from 2026, and aims much higher: it is fit to reproduce
+  wB97M-V/def2-TZVPPD, a hybrid-DFT level, while still finishing phenol in about a
+  third of a second. That makes it a genuinely different point on the cost curve.
+
+**g-xTB is a development release**, and the authors say so — the final implementation is
+going into tblite. Treat its numbers as provisional. It also has **no implicit solvent**:
+`--gxtb` with `--alpb` aborts, which is measured rather than assumed, so ligand3d declares
+it and will not hand g-xTB a solvent model it cannot run. Charges are fine.
+
+It needs the patched xtb build from [grimme-lab/g-xtb](https://github.com/grimme-lab/g-xtb/releases);
+the stock binary has no `--gxtb`. The containers carry it already.
 
 Chain them with a comma — cheap first, expensive last:
 
@@ -310,14 +390,45 @@ tool reasons about:
 ## DFT
 
 ```bash
-ligand3d build "<smiles>" -b mmff94,gfn2,orca -o thing.cif
-LIGAND3D_ORCA_METHOD=PBE0 LIGAND3D_ORCA_BASIS=def2-TZVP ligand3d build ... -b orca
+ligand3d build "<smiles>" -b mmff94,gfn2,orca -o thing.cif   # orca = B97-3c
+ligand3d build "<smiles>" -b mmff94,gfn2,orca-wb97x          # or name the level
 ```
 
-ORCA, defaulting to **B97-3c** — a composite method built for geometries, which
-is what you want when the alternative is minutes per gradient. `LIGAND3D_ORCA_METHOD`
-and `LIGAND3D_ORCA_BASIS` override it; leave the basis empty for the other
-composites (`HF-3c`, `PBEh-3c`, `r2SCAN-3c`, the last needing ORCA 5).
+**"DFT" is not a method.** A geometry labelled that way cannot be written up or
+reproduced — the functional, the basis and the dispersion correction are the answer. So
+each level of theory is its own backend, and the name of the run records what ran:
+
+| Backend | Level of theory | Rung | Needs |
+|---|---|---|---|
+| `orca-hf3c` | HF-3c | composite | ORCA 4.1+ |
+| `orca-pbeh3c` | PBEh-3c | composite | ORCA 4.1+ |
+| **`orca-b973c`** | **B97-3c** — also plain `orca` | composite | ORCA 4.1+ |
+| `orca-r2scan3c` | r2SCAN-3c | composite | **ORCA 5.0+** |
+| `orca-bp86` | BP86/def2-SVP D3(BJ) | GGA | ORCA 4.1+ |
+| `orca-tpss` | TPSS/def2-TZVP D3(BJ) | meta-GGA | ORCA 4.1+ |
+| `orca-b3lyp` | B3LYP/def2-TZVP D3(BJ) | hybrid | ORCA 4.1+ |
+| `orca-pbe0` | PBE0/def2-TZVP D3(BJ) | hybrid | ORCA 4.1+ |
+| `orca-wb97x` | wB97X-D3/def2-TZVP | range-separated hybrid | ORCA 4.1+ |
+
+Every keyword line above was run against a real ORCA rather than assumed. **The IPD's
+ORCA is 4.1.1, from 2019** (`/net/software/orca/latest`), and r2SCAN, r2SCAN-3c, D4 and
+M06-2X all postdate it — which is why `orca-r2scan3c` is the one entry gated on a newer
+version. ligand3d detects the version once and reports
+
+```
+orca-r2scan3c: r2SCAN-3c needs ORCA 5.0+; this one is 4.1
+```
+
+rather than letting ORCA exit 4 with no explanation several minutes into a job. If you
+have a newer ORCA, point `LIGAND3D_ORCA_BIN` at it and the gate lifts by itself.
+
+`LIGAND3D_ORCA_METHOD` and `LIGAND3D_ORCA_BASIS` still override the keyword line, for a
+functional with no alias here.
+
+**Which to pick.** Start with `orca-b973c`: composites pair a functional, a basis and the
+corrections that make the pairing behave, tuned together, and they are much cheaper than
+assembling the parts by hand. Reach for `orca-wb97x` when the geometry has to be right
+and you can afford it.
 
 ligand3d drives the optimiser itself and asks ORCA only for gradients
 (`ENGRAD`), so DFT produces the same trace and obeys the same convergence
