@@ -522,6 +522,10 @@
         <!-- One control rather than two checkboxes: these are three places to
              run the same build, and picking two of them is not a thing. -->
         <div class="note" id="familyNote" hidden style="margin:.4rem 0 .2rem"></div>
+        <div id="familySwitch" hidden style="margin:.35rem 0 .2rem">
+          <button type="button" id="switchFamily" class="ghost"></button>
+          <span class="note" id="switchState"></span>
+        </div>
         <div class="note" id="slurmWhy" hidden style="margin:.4rem 0 .2rem"></div>
 
         <div id="slurmBox" hidden>
@@ -1670,7 +1674,14 @@ function populateBackends(cfg) {
   // Running in a container brings the fairchem models within reach, so what
   // counts as usable depends on where the build is headed.
   const inContainer = whereValue() === "container";
-  const usable = (b) => b.ready || (inContainer && b.in_container);
+  // A backend is offerable if it can run where the build is going. Locally
+  // that means importable here. In a container, or on a SLURM node, it means
+  // some image carries it — and for SLURM that image is chosen per chain, so a
+  // fairchem model is perfectly runnable from a session started in the MACE
+  // image. Greying it out there was the UI being stricter than the thing it
+  // was describing.
+  const elsewhere = inContainer || whereValue() === "slurm";
+  const usable = (b) => b.ready || (elsewhere && b.in_container);
 
   const options = [
     '<option value="mmff94">mmff94 - classical, milliseconds</option>',
@@ -1711,15 +1722,29 @@ function populateBackends(cfg) {
   if (note) {
     const blocked = new Set(missing.map((b) => (b.reason || "").match(/module\(s\): (\w+)/)?.[1])
                                    .filter(Boolean));
-    if (blocked.has("fairchem"))
-      note.innerHTML = "eSEN, UMA and AllScAIP live in the other image \u2014 restart with " +
-        "<code>ligand3d sketch -b esen</code>. They cannot share one environment: " +
-        "mace-torch pins e3nn 0.4.4 and fairchem-core needs \u22650.5.";
-    else if (blocked.has("mace"))
-      note.innerHTML = "The MACE models live in the other image \u2014 restart with " +
-        "<code>ligand3d sketch -b mace-off</code>.";
-    else note.innerHTML = "";
+    let want = null;
+    if (blocked.has("fairchem")) {
+      note.innerHTML = "eSEN, UMA and AllScAIP live in the other image. They cannot share " +
+        "one environment: mace-torch pins e3nn 0.4.4 and fairchem-core needs \u22650.5 \u2014 " +
+        "so this is a restart, not a toggle of the running process.";
+      want = "fairchem";
+    } else if (blocked.has("mace")) {
+      note.innerHTML = "The MACE models live in the other image.";
+      want = "mace";
+    } else note.innerHTML = "";
     note.hidden = !note.innerHTML;
+
+    // Offered only when the launcher is supervising, because it is the
+    // launcher that can start the other image; nothing in here can.
+    const box = el("familySwitch"), button = el("switchFamily");
+    if (box && button) {
+      const can = want && CONFIG && CONFIG.can_switch_family;
+      box.hidden = !can;
+      if (can) {
+        button.textContent = "Switch to the " + want + " image";
+        button.dataset.family = want;
+      }
+    }
   }
   // Keep the current choice across a repopulate, so switching to "in a
   // container" does not silently reset a method that is now selectable.
@@ -1810,6 +1835,36 @@ async function init() {
     .catch(() => {
       el("backendHint").textContent =
         "could not load the method list; mmff94 still works";
+    });
+
+  const switchButton = el("switchFamily");
+  if (switchButton)
+    switchButton.addEventListener("click", async () => {
+      const family = switchButton.dataset.family;
+      switchButton.disabled = true;
+      el("switchState").textContent = "restarting in the " + family + " image \u2026";
+      try {
+        await fetch("/api/switch-family", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ family }),
+        });
+      } catch (e) { /* the server goes away mid-request; that is the point */ }
+      // It comes back on the same port, so waiting for it to answer again and
+      // reloading is the whole of the client's job.
+      const deadline = Date.now() + 180000;
+      const poll = async () => {
+        try {
+          const r = await fetch("/api/config", { cache: "no-store" });
+          if (r.ok) { location.reload(); return; }
+        } catch (e) { /* still down */ }
+        if (Date.now() < deadline) setTimeout(poll, 1000);
+        else {
+          el("switchState").textContent = "it did not come back \u2014 check the terminal";
+          switchButton.disabled = false;
+        }
+      };
+      setTimeout(poll, 2500);
     });
 
   fetch("/api/templates")

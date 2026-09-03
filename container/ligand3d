@@ -175,13 +175,65 @@ case "$cwd" in /home/*|/net/*|/mnt/*|/projects/*|/scratch/*) ;; *) binds+=(--bin
 nv=()
 [[ $family != core ]] && command -v nvidia-smi >/dev/null 2>&1 && nv=(--nv)
 
-if [[ -f $own ]]; then
-    # ligand3d is installed in this image, so nothing needs to be carried in.
-    exec apptainer run "${nv[@]}" "${binds[@]}" --pwd "$cwd" \
+# The sketcher can ask to come back in the other neural family. It cannot do
+# that itself: mace-torch pins e3nn 0.4.4 and fairchem-core needs >=0.5, so no
+# process holds both, and nothing inside an image can start another one. So it
+# exits 86 with the family it wants in a file, and the supervision happens
+# here, where starting an image is possible. To the browser it looks like a
+# toggle that takes a while — the port is the same, so the page just waits for
+# an answer and reloads.
+SWITCH_EXIT=86
+switch_file=""
+if [[ $subcommand == sketch ]]; then
+    switch_file="$(mktemp "${TMPDIR:-/tmp}/ligand3d-switch-XXXXXX")"
+    trap 'rm -f "$switch_file"' EXIT
+fi
+
+run_image () {
+    local image="$1"; shift
+    apptainer run "${nv[@]}" "${binds[@]}" --pwd "$cwd" \
         --env LIGAND3D_LAUNCHER=1 \
         --env "HF_HOME=${HF_HOME:-/net/databases/huggingface}" \
         --env TORCHDYNAMO_DISABLE=1 \
-        "$own" "${sketch_args[@]}"
+        ${switch_file:+--bind "$switch_file:$switch_file"} \
+        ${switch_file:+--env "LIGAND3D_SWITCH_FILE=$switch_file"} \
+        "$image" "$@"
+}
+
+if [[ -f $own ]]; then
+    # ligand3d is installed in this image, so nothing needs to be carried in.
+    if [[ -z $switch_file ]]; then
+        exec apptainer run "${nv[@]}" "${binds[@]}" --pwd "$cwd" \
+            --env LIGAND3D_LAUNCHER=1 \
+            --env "HF_HOME=${HF_HOME:-/net/databases/huggingface}" \
+            --env TORCHDYNAMO_DISABLE=1 \
+            "$own" "${sketch_args[@]}"
+    fi
+
+    while :; do
+        : > "$switch_file"
+        set +e
+        run_image "$own" "${sketch_args[@]}"
+        status=$?
+        set -e
+
+        wanted="$(cat "$switch_file" 2>/dev/null)"
+        if [[ $status != "$SWITCH_EXIT" || -z $wanted ]]; then
+            exit "$status"
+        fi
+
+        next="$HERE/ligand3d-$wanted.sif"
+        if [[ ! -f $next ]]; then
+            printf 'ligand3d: no %s here, staying put.\n' "$(basename "$next")" >&2
+            exit 1
+        fi
+        own="$next"
+        nv=()
+        command -v nvidia-smi >/dev/null 2>&1 && nv=(--nv)
+        printf '\nligand3d: restarting in the %s image ...\n' "$wanted" >&2
+        # The browser is already open and polling, so nothing reopens it.
+        no_browser=1
+    done
 fi
 
 # --- fallback: a lab image that has the potentials but not ligand3d ---------

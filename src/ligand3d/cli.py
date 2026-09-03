@@ -815,7 +815,9 @@ def sketch(
     The server stays up: draw, build, read the log, clear, draw the next one.
     Every option in the page maps to a `ligand3d build` flag.
     """
-    from .sketch.server import serve
+    import os
+
+    from .sketch.server import SWITCH_EXIT_CODE, serve
     from .sketch.session import next_filename
 
     target = str((directory or Path.cwd()).expanduser().resolve())
@@ -829,6 +831,14 @@ def sketch(
         serve(port=port, open_browser=not no_browser, defaults=defaults)
     except Ligand3DError as exc:
         _fail(exc)
+
+    # The page can ask to come back in the other neural image. Nothing in this
+    # process can do that — the two pin incompatible e3nn versions — so it
+    # exits with a code the launcher watches for, and the launcher brings the
+    # other image up on the same port.
+    marker = os.environ.get("LIGAND3D_SWITCH_FILE")
+    if marker and Path(marker).exists() and Path(marker).read_text().strip():
+        raise typer.Exit(SWITCH_EXIT_CODE)
 
 
 @app.command()

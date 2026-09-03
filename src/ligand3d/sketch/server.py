@@ -42,6 +42,11 @@ from .session import (
     solvent_catalog,
 )
 
+#: Returned by `sketch` when the page asked to be restarted in the other
+#: neural image. Distinct from 0 and 1 so the launcher can tell "switch"
+#: apart from "finished" and "failed"; 86 is otherwise unused here.
+SWITCH_EXIT_CODE = 86
+
 JSME_RELEASE = "JSME_2024-04-29"
 JSME_URL = (
     "https://raw.githubusercontent.com/jsme-editor/jsme-editor.github.io/"
@@ -189,6 +194,11 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 {
                     "engine": self.engine.name if self.engine else None,
                     "defaults": self.defaults,
+                    # Only the launcher can start the other image — nothing in
+                    # here can, and nested apptainer does not work. So the page
+                    # offers the switch only when something is out there to
+                    # act on it.
+                    "can_switch_family": bool(os.environ.get("LIGAND3D_SWITCH_FILE")),
                 }
             )
             return
@@ -288,6 +298,10 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             self._json(info.to_json())
             return
 
+        if path == "/api/switch-family":
+            self._switch_family(self._read_json())
+            return
+
         if path == "/api/preview":
             self._preview(self._read_json())
             return
@@ -340,6 +354,38 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             self._json({"error": str(exc)}, 404)
         except Exception as exc:  # a genuine bug, not a failed lookup
             self._json({"error": f"unexpected {type(exc).__name__}: {exc}"}, 500)
+
+    def _switch_family(self, data: dict) -> None:
+        """Ask the launcher to restart this session in the other image.
+
+        mace-torch pins e3nn 0.4.4 and fairchem-core needs >=0.5, so the two
+        neural families cannot be loaded into one process — no amount of
+        in-process switching gets you from one to the other. What can be done
+        is to stand down and let the launcher bring the other image up on the
+        same port, which from the browser looks like a toggle that takes a
+        while.
+
+        The requested family goes to a file the launcher named, because the
+        exit code alone cannot carry it.
+        """
+        target = str(data.get("family") or "").strip().lower()
+        if target not in ("mace", "fairchem"):
+            self._json({"error": f"unknown family {target!r}"}, 400)
+            return
+
+        marker = os.environ.get("LIGAND3D_SWITCH_FILE")
+        if not marker:
+            self._json(
+                {"error": "not running under the launcher, so nothing can restart this"},
+                409,
+            )
+            return
+
+        Path(marker).write_text(target)
+        self._json({"switching": target})
+        # After the response is on the wire, not before: the page needs the
+        # answer in order to know to start polling for the new one.
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     def _preview(self, data: dict) -> None:
         """Render how the drawing is being read, with atom indices.

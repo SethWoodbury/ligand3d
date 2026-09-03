@@ -574,10 +574,20 @@ class TestTheEditorNeverWaitsOnTheFilesystem:
         )
 
     def test_config_carries_what_the_editor_needs_and_no_more(self, session):
-        """If the expensive keys come back here, something moved back in."""
+        """Nothing that touches the filesystem may be served from here.
+
+        Named rather than an exact-set match: the point is that the expensive
+        keys stay out, not that the cheap set never grows. Probing for weights
+        or for sbatch costs seconds on a cold network filesystem, and this is
+        the call the editor waits on before it can be drawn in.
+        """
         base, _ = session
         payload = _get(base, "/api/config")
-        assert set(payload) == {"engine", "defaults"}
+        forbidden = {"backends", "solvents", "slurm", "container", "templates", "models"}
+        assert not (forbidden & set(payload)), (
+            f"{forbidden & set(payload)} moved back onto the editor's critical path"
+        )
+        assert {"engine", "defaults"} <= set(payload)
 
     def test_the_expensive_half_is_still_served(self, session):
         base, _ = session
