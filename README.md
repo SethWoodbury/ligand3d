@@ -400,35 +400,61 @@ each level of theory is its own backend, and the name of the run records what ra
 
 | Backend | Level of theory | Rung | Needs |
 |---|---|---|---|
-| `orca-hf3c` | HF-3c | composite | ORCA 4.1+ |
-| `orca-pbeh3c` | PBEh-3c | composite | ORCA 4.1+ |
-| **`orca-b973c`** | **B97-3c** — also plain `orca` | composite | ORCA 4.1+ |
-| `orca-r2scan3c` | r2SCAN-3c | composite | **ORCA 5.0+** |
-| `orca-bp86` | BP86/def2-SVP D3(BJ) | GGA | ORCA 4.1+ |
-| `orca-tpss` | TPSS/def2-TZVP D3(BJ) | meta-GGA | ORCA 4.1+ |
-| `orca-b3lyp` | B3LYP/def2-TZVP D3(BJ) | hybrid | ORCA 4.1+ |
-| `orca-pbe0` | PBE0/def2-TZVP D3(BJ) | hybrid | ORCA 4.1+ |
-| `orca-wb97x` | wB97X-D3/def2-TZVP | range-separated hybrid | ORCA 4.1+ |
+| `orca-hf3c` | HF-3c | composite | any |
+| `orca-pbeh3c` | PBEh-3c | composite | any |
+| **`orca-b973c`** | **B97-3c** — also plain `orca` | composite | any |
+| `orca-bp86` | BP86/def2-SVP D3(BJ) | GGA | any |
+| `orca-tpss` | TPSS/def2-TZVP D3(BJ) | meta-GGA | any |
+| `orca-b3lyp` | B3LYP/def2-TZVP D3(BJ) | hybrid | any |
+| `orca-pbe0` | PBE0/def2-TZVP D3(BJ) | hybrid | any |
+| `orca-wb97x` | wB97X-D3/def2-TZVP | range-separated | any |
+| `orca-r2scan3c` | r2SCAN-3c | composite | ORCA 5+ |
+| `orca-r2scan` | r2SCAN/def2-TZVP **D4** | meta-GGA | ORCA 5+ |
+| `orca-wb97xd4` | wB97X-**D4**/def2-TZVP | range-separated | ORCA 5+ |
+| `orca-wb97mv` | wB97M-V/def2-TZVPD | range-separated | ORCA 5+ |
+| `orca-m062x` | M06-2X/def2-TZVP | hybrid meta-GGA | ORCA 5+ |
+| **`orca-wb97x3c`** | **wB97X-3c** | composite | ORCA 6+ |
 
-Every keyword line above was run against a real ORCA rather than assumed. **The IPD's
-ORCA is 4.1.1, from 2019** (`/net/software/orca/latest`), and r2SCAN, r2SCAN-3c, D4 and
-M06-2X all postdate it — which is why `orca-r2scan3c` is the one entry gated on a newer
-version. ligand3d detects the version once and reports
+Every keyword line was run, not assumed — against both ORCAs on this cluster.
+
+### Which ORCA you get, and why it matters
+
+```mermaid
+flowchart LR
+  A["/net/software/lab/quantum_chem/bin/orca<br/><b>6.1.1</b> · all 15 methods"] -->|preferred| L["ligand3d"]
+  B["/net/software/orca/latest<br/>4.1.1, 2019 · 8 methods"] -->|fallback| L
+  L --> C["version read from<br/>registry/installations.toml<br/><small>3 ms, no ORCA launch</small>"]
+  style A fill:#e6f4ea,stroke:#34a853,color:#000
+  style B fill:#fef7e0,stroke:#fbbc04,color:#000
+```
+
+ligand3d prefers the lab's verified **ORCA 6.1.1** install and falls back to the 2019
+4.1.1 if that is missing, so a machine with only the old one still works — with eight
+methods instead of fifteen, which it *says* rather than discovering mid-job:
 
 ```
 orca-r2scan3c: r2SCAN-3c needs ORCA 5.0+; this one is 4.1
 ```
 
-rather than letting ORCA exit 4 with no explanation several minutes into a job. If you
-have a newer ORCA, point `LIGAND3D_ORCA_BIN` at it and the gate lifts by itself.
+The version comes from that tree's `registry/installations.toml` when the resolved binary
+lives inside it — 3 ms and better evidence than a banner, and the registry also records
+whether the install passed its smoke tests. Otherwise ligand3d runs ORCA once and reads
+the banner, since ORCA does not answer `--version`. Set `LIGAND3D_ORCA_BIN` to override.
 
-`LIGAND3D_ORCA_METHOD` and `LIGAND3D_ORCA_BASIS` still override the keyword line, for a
-functional with no alias here.
+> **wB97X-3c energies are not comparable to the others.** Its vDZP basis carries
+> effective core potentials, so methanol comes out at −24 Eh rather than −115.6. That is
+> the method behaving correctly, not a bug — but do not put it in a table beside an
+> all-electron result. Conformer ranking within a run is unaffected, since every
+> conformer uses the same method.
 
-**Which to pick.** Start with `orca-b973c`: composites pair a functional, a basis and the
-corrections that make the pairing behave, tuned together, and they are much cheaper than
-assembling the parts by hand. Reach for `orca-wb97x` when the geometry has to be right
-and you can afford it.
+**Which to pick.** On ORCA 6, start with **`orca-wb97x3c`** — a range-separated hybrid composite is the
+best geometry-per-second on offer. On an older ORCA, `orca-b973c`. Composites pair a
+functional, a basis and the corrections that make the pairing behave, tuned together, and
+are much cheaper than assembling the parts by hand.
+
+Reach past them when you need a number rather than a geometry: `orca-wb97mv` is about the
+most accurate thing here for organic molecules, and is the level **g-xTB is fit to
+reproduce** — which makes it the natural reference to check `gxtb` against.
 
 ligand3d drives the optimiser itself and asks ORCA only for gradients
 (`ENGRAD`), so DFT produces the same trace and obeys the same convergence

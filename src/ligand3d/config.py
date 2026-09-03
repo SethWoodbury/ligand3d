@@ -15,6 +15,7 @@ reading this file.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -272,7 +273,15 @@ _CREST_PROBE = [
     Path("/home/woodbuse/conda/envs/qcb-xtb/bin/crest"),
     CACHE_DIR / "crest" / "bin" / "crest",
 ]
+#: Newest first. The IPD's lab install is a wrapper script that sets PATH and
+#: LD_LIBRARY_PATH before exec'ing the real binary with an absolute path, which
+#: is what a shared ORCA build and its OpenMPI need; the version it selects is
+#: recorded in that tree's registry/installations.toml. The older
+#: /net/software/orca/latest is ORCA 4.1.1 from 2019 and stays as a fallback,
+#: so a machine with only that still works — with fewer methods, which the
+#: per-method version gate reports rather than discovering at run time.
 _ORCA_PROBE = [
+    Path("/net/software/lab/quantum_chem/bin/orca"),
     Path("/net/software/orca/latest/orca"),
     Path("/software/orca/latest/orca"),
     CACHE_DIR / "orca" / "orca",
@@ -480,6 +489,12 @@ def resolve_crest() -> Resolution:
     return resolve_binary("crest", _CREST_PROBE)
 
 
+#: Executables that only the quantum chemistry ORCA ships. ORCA 6 dropped
+#: orca_scf, so more than one name is checked — a single name silently stopped
+#: recognising a whole major version.
+_ORCA_SIBLINGS = ("orca_scf", "orca_gtoint", "orca_scfgrad", "orca_main", "orca_cpscf")
+
+
 def _is_quantum_orca(path: Path) -> bool:
     """True if this `orca` is the quantum chemistry program.
 
@@ -491,10 +506,28 @@ def _is_quantum_orca(path: Path) -> bool:
     try:
         if path.is_symlink():
             path = path.resolve()
+
+        # A launcher script is the other legitimate shape. A shared-library
+        # ORCA needs LD_LIBRARY_PATH set and its own absolute path passed for
+        # parallel runs, so the sanctioned entry point at the IPD is a small
+        # wrapper that does both — and a size check alone would reject it for
+        # looking exactly like the screen reader. Read it instead: a wrapper
+        # for the real thing names an ORCA tree that has the sibling binaries.
         if path.stat().st_size < 1_000_000:
+            try:
+                text = path.read_text(errors="replace")
+            except OSError:
+                return False
+            if "orca" not in text.lower():
+                return False
+            for token in re.findall(r"/[\w./+-]+", text):
+                candidate = Path(token)
+                root = candidate if candidate.is_dir() else candidate.parent
+                if any((root / sibling).exists() for sibling in _ORCA_SIBLINGS):
+                    return True
             return False
-        return any((path.parent / sibling).exists()
-                   for sibling in ("orca_scf", "orca_gtoint", "orca_scfgrad"))
+
+        return any((path.parent / sibling).exists() for sibling in _ORCA_SIBLINGS)
     except OSError:
         return False
 

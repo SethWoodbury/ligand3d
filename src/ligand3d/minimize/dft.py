@@ -71,9 +71,14 @@ class Method:
     min_orca: tuple[int, int] = (4, 1)
     """Oldest ORCA that knows these keywords.
 
-    Every entry was checked against a real ORCA rather than assumed: the
-    cluster's is 4.1.1, from 2019, and r2SCAN, r2SCAN-3c, D4 and M06-2X all
-    postdate it. Without this the failure arrives as `exit status 4`.
+    Every entry was checked by running it, against both ORCAs on this cluster:
+    4.1.1 from 2019, and 6.1.1. r2SCAN, r2SCAN-3c, D4, wB97X-3c and M06-2X all
+    fail on 4.1.1 and pass on 6.1.1. Without this the failure arrives as
+    `exit status 4`, with nothing naming the cause, minutes into a job.
+
+    The bounds are conservative: they say "verified to work at or above this",
+    not "provably fails below it". A method may well run on an ORCA between the
+    two, and pointing LIGAND3D_ORCA_BIN at it is the way to find out.
     """
 
 
@@ -107,27 +112,99 @@ METHODS: tuple[Method, ...] = (
            "PBE0/def2-TZVP with D3(BJ). A parameter-free hybrid, generally "
            "better behaved than B3LYP.", "hybrid"),
     Method("orca-wb97x", "wB97X-D3 def2-TZVP",
-           "wB97X-D3/def2-TZVP. Range-separated hybrid, among the most accurate "
-           "levels here for organic molecules, and priced accordingly.",
+           "wB97X-D3/def2-TZVP. Range-separated hybrid, accurate for organic "
+           "molecules and priced accordingly. Runs on any ORCA here.",
            "range-separated hybrid"),
+    # --- everything below needs an ORCA newer than 2019 -------------------
+    Method("orca-wb97x3c", "wB97X-3c",
+           "wB97X-3c: a range-separated hybrid composite on its own vDZP basis. "
+           "The best geometry-per-second on offer. Note its basis carries "
+           "effective core potentials, so its total energies sit on a different "
+           "scale from every all-electron method here (methanol: -24 Eh, not "
+           "-115.6) and are not comparable across methods. Conformer ranking "
+           "within a run is unaffected.",
+           "composite", min_orca=(6, 0)),
+    Method("orca-r2scan", "r2SCAN def2-TZVP D4",
+           "r2SCAN/def2-TZVP with D4 dispersion. A modern meta-GGA; D4 is a "
+           "real improvement over D3 for charged and polar systems.",
+           "meta-GGA", min_orca=(5, 0)),
+    Method("orca-wb97xd4", "wB97X-D4 def2-TZVP",
+           "wB97X-D4/def2-TZVP. The wB97X above, with the newer dispersion "
+           "correction.", "range-separated hybrid", min_orca=(5, 0)),
+    Method("orca-wb97mv", "wB97M-V def2-TZVPD",
+           "wB97M-V/def2-TZVPD. Among the most accurate functionals in routine "
+           "use for organic chemistry, and the level g-xTB is fit to reproduce "
+           "— so it is the reference to check g-xTB against.",
+           "range-separated hybrid", min_orca=(5, 0)),
+    Method("orca-m062x", "M062X def2-TZVP",
+           "M06-2X/def2-TZVP. Heavily parameterised, still widely used for "
+           "thermochemistry and barriers. Note ORCA spells it M062X.",
+           "hybrid meta-GGA", min_orca=(5, 0)),
 )
 
 METHODS_BY_ALIAS = {m.alias: m for m in METHODS}
+
+
+#: The IPD's quantum-chemistry tree records what it installed, and whether the
+#: install was actually verified. Reading that is both faster and better
+#: evidence than re-deriving the version from a banner.
+ORCA_REGISTRY = Path("/net/software/lab/quantum_chem/registry/installations.toml")
+
+
+def _version_from_registry(binary: Path) -> tuple[int, int] | None:
+    """The recorded version for this binary, if a registry describes it.
+
+    Only trusted when the resolved binary actually lives in the tree the
+    registry describes — otherwise a registry on one path would be asserting
+    the version of an ORCA somewhere else entirely.
+    """
+    if not ORCA_REGISTRY.exists():
+        return None
+    try:
+        import tomllib
+
+        data = tomllib.loads(ORCA_REGISTRY.read_text())
+    except Exception:
+        return None
+
+    resolved = str(binary.resolve())
+    root = str(ORCA_REGISTRY.parent.parent)
+    if not resolved.startswith(root):
+        return None
+
+    best: tuple[int, int] | None = None
+    for entry in (data.get("orca") or {}).values():
+        version = str(entry.get("version", ""))
+        found = re.match(r"(\d+)\.(\d+)", version)
+        if not found:
+            continue
+        # A recorded install that never passed its own smoke test is not
+        # evidence of anything; fall through to asking the binary.
+        if entry.get("serial_smoke_test") not in (None, "passed"):
+            continue
+        pair = (int(found.group(1)), int(found.group(2)))
+        if best is None or pair > best:
+            best = pair
+    return best
 
 
 @lru_cache(maxsize=1)
 def orca_version() -> tuple[int, int] | None:
     """The installed ORCA's version, or None if it cannot be determined.
 
-    ORCA prints it in its banner rather than answering --version, so this runs
-    it on an empty input and reads the header. Cached: it costs about a second
-    and never changes within a run.
+    Prefers the site registry, which is authoritative and free. Falls back to
+    running ORCA on a one-atom input and reading its banner, since ORCA does
+    not answer --version. Cached either way: it never changes within a run.
     """
     from ..config import resolve_orca
 
     resolution = resolve_orca()
     if not resolution.found:
         return None
+
+    recorded = _version_from_registry(Path(resolution.path))
+    if recorded is not None:
+        return recorded
     with tempfile.TemporaryDirectory(prefix="ligand3d-orca-v") as scratch:
         probe = Path(scratch) / "v.inp"
         probe.write_text("! HF\n* xyz 0 1\nH 0 0 0\n*\n")
