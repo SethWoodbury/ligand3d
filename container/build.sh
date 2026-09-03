@@ -3,7 +3,7 @@
 # Build a release of ligand3d as a container, and stage it for the lab.
 #
 #     container/build.sh                      # build into ./dist
-#     container/build.sh /net/software/containers/users/woodbuse/ligand3d
+#     container/build.sh /net/software/lab/ligand3d
 #
 # The result is a directory holding the image, the launcher, and a note saying
 # what version it is. Point PATH at it and `ligand3d` works with nothing

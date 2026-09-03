@@ -4,7 +4,7 @@
 #
 # Put this directory on your PATH and `ligand3d` works with nothing installed:
 #
-#     export PATH=/net/software/containers/users/woodbuse/ligand3d:$PATH
+#     export PATH=/net/software/lab/ligand3d:$PATH
 #     ligand3d build "O=C1CN2CCC1CC2" -o quin.cif
 #
 # It picks an image from the backend you asked for, because the neural

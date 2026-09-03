@@ -59,16 +59,20 @@ flowchart TD
 
 ### At the IPD, on digs — nothing to install
 
-The containers live on `/net` and are world-readable, so every node can already see them
-and you need no environment of your own:
+It lives in the lab software tree alongside everything else the lab shares, is
+world-readable, and `/net` is automounted on every node — so there is nothing to install:
 
 ```bash
-export PATH=/net/software/containers/users/woodbuse/ligand3d:$PATH   # put this in ~/.bashrc
+export PATH=/net/software/lab/ligand3d:$PATH   # put this in ~/.bashrc
 
 ligand3d build "O=C1CN2CCC1CC2" -o quin.cif   # SMILES -> minimized 3D
 ligand3d sketch                                # or draw it in a browser
 ligand3d doctor                                # what is available here, and why
 ```
+
+(The older `/net/software/containers/users/woodbuse/ligand3d` path still works — it is a
+symlink to the above — but `/net/software/lab/ligand3d` is where it lives now, beside
+`quantum_chem`, `alphafold3` and the rest.)
 
 That is the whole setup — no clone, no venv, no `module load`. `/net` and `/home` are
 automounted on every node, so the same line works from a login node or a compute node, and
@@ -182,7 +186,7 @@ one `PATH` entry.
 
 ```bash
 container/build.sh                    # into ./dist
-container/build.sh /net/software/containers/users/woodbuse/ligand3d
+container/build.sh /net/software/lab/ligand3d
 ```
 
 A shared destination is built locally and copied at the end, each image verified by
@@ -206,7 +210,7 @@ To cut a release:
 
 ```bash
 container/build.sh                    # into ./dist
-container/build.sh /net/software/containers/users/woodbuse/ligand3d
+container/build.sh /net/software/lab/ligand3d
 ```
 
 The build runs `container/selfcheck.py` inside the image and **fails rather than producing
@@ -901,19 +905,43 @@ accuracy one, and ligand3d refuses those pairings rather than answering them.
 - **Long-range electrostatics matter** — `mace-polar`, and budget a minute per molecule.
 - **Inorganic or metal-containing** — `mace-mp`, which is the only one trained for it.
 
-## Running on a GPU (SLURM, at the IPD)
+## Running it on the cluster (SLURM, at the IPD)
 
 Everything above runs on whatever machine you are sitting at. On the IPD cluster you can
-hand a build to a GPU node instead:
+hand a build to a compute node instead — a GPU one, or a CPU one:
 
 ```bash
-ligand3d build "NCC1(CC(=O)O)CCCCC1" -b mace-off -n 3 --slurm
+ligand3d build "NCC1(CC(=O)O)CCCCC1" -b mace-off -n 3 --slurm      # GPU
+ligand3d build "<smiles>" -b mmff94,orca-wb97x3c --slurm --slurm-partition cpu
 ligand3d slurm                      # can this host submit? what containers are there?
 ligand3d slurm --job 18977069       # what happened to that job?
 ```
 
-or tick **run this on a GPU node (SLURM)** in the sketcher. The option only appears when
-the host can actually submit, so nowhere else is offered a checkbox that could only fail.
+In the sketcher, **Run** offers both, and the option only appears when the host can
+actually submit — nowhere else is shown a control that could only fail.
+
+```mermaid
+flowchart TD
+  W{"what is at the<br/>expensive end?"}
+  W -->|"neural potential"| G["on a GPU node<br/><small>gpu · gpu-bf</small>"]
+  W -->|"ORCA: DFT or HF"| C["on a CPU node<br/><small>cpu · cpu-bf · 132 nodes, 28+ cores</small>"]
+  G -.->|"queue too long?<br/>slower, but shorter wait"| C
+  style G fill:#e8f0fe,stroke:#4285f4,color:#000
+  style C fill:#e6f4ea,stroke:#34a853,color:#000
+```
+
+**Which node.** ORCA is MPI-parallel across cores and gains nothing from a GPU, so a DFT
+job on the `gpu` partition holds a card it never touches while queueing behind work that
+needs one. The page points you at the CPU option for quantum chemistry, and notes the
+slowdown if you send a neural potential there — but it does not decide for you, because
+the `cpu` queue is often much shorter and that is a legitimate reason to take it.
+
+**What you can set.** Partition, walltime, CPU cores, memory, account, and GPU class when
+a GPU is involved. Choosing a CPU destination hides the GPU class and requests no GRES, so
+there is no way to ask for a CPU partition and a card at once.
+
+Nothing here changes where a build runs unless you say so: **a DFT chain does not
+auto-submit.** Where it runs is only ever what **Run** says.
 
 This is optional in the strongest sense: `slurm.py` is imported from exactly one place in
 the CLI, nothing else in ligand3d touches it, and importing the package does not load it.
