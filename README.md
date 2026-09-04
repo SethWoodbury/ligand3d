@@ -229,6 +229,61 @@ all work with nothing else present.
 Using it needs nothing but the `PATH` line in the [Quickstart](#quickstart) — this section
 is for the person cutting the release.
 
+### Three places, in order
+
+```mermaid
+flowchart LR
+  A["~/codebase_projects/ligand3d<br/><b>develop</b><br/><small>editable venv — edits are live</small>"]
+  B["/net/software/lab/ligand3d-dev<br/><b>rehearse</b><br/><small>does it survive being containerised?</small>"]
+  C["/net/software/lab/ligand3d<br/><b>ship</b><br/><small>what the lab runs</small>"]
+  A -->|"build.sh"| B -->|"build.sh"| C
+  style A fill:#e8f0fe,stroke:#4285f4,color:#000
+  style B fill:#fef7e0,stroke:#fbbc04,color:#000
+  style C fill:#e6f4ea,stroke:#34a853,color:#000
+```
+
+**Develop in the checkout.** The venv is an editable install, so it imports
+`src/ligand3d/` directly — edit a file and run it, no rebuild:
+
+```bash
+cd ~/codebase_projects/ligand3d && .venv/bin/ligand3d sketch
+```
+
+**Rehearse in `ligand3d-dev`.** A change can be perfect in the venv and still break once
+containerised — a missing system library, a probe path that does not exist inside, a file
+that was never copied. That has happened repeatedly here: `libgomp1`, `libXrender`,
+`libexpat`, the ORCA wrapper, `graph_longrange`. None of them could fail in a venv. It
+lives on `/net` rather than in `$HOME` so the rehearsal uses the same filesystem and
+permissions as the real thing.
+
+```bash
+LIGAND3D_ALIAS=ligand3d-dev container/build.sh /net/software/lab/ligand3d-dev
+ligand3d-dev doctor          # and whatever you changed
+```
+
+**Then ship.**
+
+```bash
+LIGAND3D_ALIAS=ligand3d-lab container/build.sh /net/software/lab/ligand3d
+git tag -a v0.3.1 -m "..." && git push origin v0.3.1
+```
+
+### Addressing them
+
+```bash
+export PATH=/net/software/lab/ligand3d:/net/software/lab/ligand3d-dev:$PATH
+```
+
+| Command | Runs |
+|---|---|
+| `ligand3d` | the shipped copy — the safe default, and what a labmate gets |
+| `ligand3d-lab` | the shipped copy, explicitly |
+| `ligand3d-dev` | the rehearsal copy |
+
+The shipped directory comes first deliberately: an unqualified `ligand3d` should be the
+thing everyone else is running, and reaching the release candidate should take saying so.
+Labmates add only the first path and never see `ligand3d-dev` at all.
+
 `container/build.sh` produces a directory holding the images, a launcher, and a `VERSION`
 note saying what is in them. Everything is world-readable, so a labmate needs only that
 one `PATH` entry.
