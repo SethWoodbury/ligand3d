@@ -107,6 +107,21 @@ done
 
 install -m 0755 "$HERE/ligand3d" "$WORK/ligand3d"
 
+# A second name for the same launcher, so two installs can be addressed
+# unambiguously when both are on PATH. The launcher resolves its own directory
+# through readlink, so a symlink beside it finds the right images.
+#
+#   LIGAND3D_ALIAS=ligand3d-lab container/build.sh /net/software/lab/ligand3d
+#   LIGAND3D_ALIAS=ligand3d-dev container/build.sh ~/ligand3d-dev
+#
+# Without it, `ligand3d` is whichever directory comes first on PATH, which is
+# what you want day to day and exactly what you cannot rely on when checking
+# whether a change actually shipped.
+if [[ -n ${LIGAND3D_ALIAS:-} ]]; then
+    ln -sfn ligand3d "$WORK/$LIGAND3D_ALIAS"
+    echo "  also installed as $LIGAND3D_ALIAS"
+fi
+
 cat > "$WORK/VERSION" <<EOF
 ligand3d $version
 commit  $commit$dirty
