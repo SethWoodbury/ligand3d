@@ -96,6 +96,13 @@ class TraceStep:
     backend: str
     step: int
     energy: float
+    conf_id: int = -1
+    """Which conformer this step belongs to.
+
+    Without it, tracing more than one conformer yields one series that jumps
+    between them — a curve describing nothing. The plot groups on
+    (stage, conf_id) for exactly this reason.
+    """
     energy_unit: str = "kcal/mol"
     energy_kind: str = "strain"
     delta: float | None = None
@@ -109,6 +116,7 @@ class TraceStep:
     def to_json(self) -> dict:
         return {
             "stage": self.stage,
+            "conf_id": self.conf_id,
             "backend": self.backend,
             "step": self.step,
             "energy": self.energy,
@@ -127,6 +135,8 @@ class MinimizeJob:
     charge: int = 0
     multiplicity: int = 1
     max_steps: int = 500
+    """Per backend, per conformer — not a budget shared across a chain. A
+    three-method chain on five conformers may take fifteen times this."""
     fmax: float = 0.05
     """Force convergence threshold in eV/Angstrom (ASE backends only)."""
     solvent: str | None = None
@@ -140,6 +150,8 @@ class MinimizeJob:
     internally.
     """
     trajectory: bool = False
+    trajectory_every: int = 1
+    """Keep every Nth frame. 1 keeps all of them."""
     """Keep the coordinates at every step so the path can be written out."""
     stage: int = 0
     """Which link of a backend chain this job is; recorded on each trace step."""

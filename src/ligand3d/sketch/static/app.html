@@ -518,6 +518,20 @@
         <div class="checks">
           <label><input type="checkbox" id="trace" checked> log energy at every step (slower)</label>
           <label><input type="checkbox" id="trajectory"> save the step-by-step geometry</label>
+          <label class="check"><input type="checkbox" id="split_conformers">
+            separate file per conformer <span class="note">(_conf_0 = lowest energy)</span></label>
+          <div class="row two" id="trajOpts" hidden>
+            <div>
+              <label for="trajectory_every">Save every Nth frame</label>
+              <input type="number" id="trajectory_every" value="10" min="1" max="500" step="1">
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <div class="note">the final geometry is always kept</div>
+            </div>
+          </div>
+          <label class="check"><input type="checkbox" id="align_conformers" checked>
+            superimpose conformers <span class="note">(so they overlay in PyMOL)</span></label>
         </div>
         <div class="note">
           Tracing draws the curve below and reports the change per step. The trajectory is
@@ -1360,6 +1374,9 @@ function collectSettings() {
     params_code: el("params_code").value.trim() || null,
     allow_code_conflict: el("allow_code_conflict").checked,
     threads: Number(el("threads").value) || 1,
+    split_conformers: el("split_conformers").checked,
+    trajectory_every: Number(el("trajectory_every").value) || 10,
+    align_conformers: el("align_conformers").checked,
     where: whereValue(),
     slurm_options: {
       partition: el("slurm_partition").value,
@@ -1608,13 +1625,42 @@ function drawPlot(trace) {
   // *changes* are both kcal/mol and can. The curves are deliberately not joined
   // end to end: that would read as one continuous descent and imply the two
   // drops add up, which they do not.
+  // Grouped on (stage, conformer), not stage alone. With several conformers
+  // traced, grouping by stage would concatenate them into one series that
+  // jumps between molecules — a curve describing nothing. Conformers of the
+  // same stage share an x offset so they overlay and can be compared, which
+  // is the entire reason for drawing more than one.
   const stages = Array.from(new Set(trace.map((s) => s.stage))).sort((a, b) => a - b);
+  const groups = [];
+  stages.forEach((stage) => {
+    const inStage = trace.filter((s) => s.stage === stage);
+    const confs = Array.from(new Set(inStage.map((s) => s.conf_id)));
+    confs.forEach((conf) => {
+      groups.push({ stage, conf, steps: inStage.filter((s) => s.conf_id === conf) });
+    });
+  });
+
+  // Every conformer in a stage starts at the same x, so the curves overlay and
+  // can be read against each other. The stage then advances by its longest
+  // conformer, so stages stay side by side rather than overlapping.
+  const stageStart = {};
   let offset = 0;
-  const series = stages.map((stage) => {
-    const steps = trace.filter((s) => s.stage === stage);
+  stages.forEach((stage) => {
+    stageStart[stage] = offset;
+    const longest = Math.max(
+      ...groups.filter((g) => g.stage === stage).map((g) => g.steps.length)
+    );
+    offset += longest;
+  });
+
+  const series = groups.map((group) => {
+    const steps = group.steps;
+    const start = stageStart[group.stage];
     const first = steps[0].energy;
-    const points = steps.map((s, i) => ({ x: offset + i, y: s.energy - first }));
-    const entry = {
+    const points = steps.map((s, i) => ({ x: start + i, y: s.energy - first }));
+    return {
+      conf: group.conf,
+      nConfs: groups.filter((g) => g.stage === group.stage).length,
       backend: steps[0].backend,
       unit: steps[0].energy_unit,
       kind: steps[0].energy_kind,
@@ -1623,11 +1669,9 @@ function drawPlot(trace) {
       absFirst: first,
       absLast: steps[steps.length - 1].energy,
       count: steps.length,
-      start: offset,
-      end: offset + steps.length - 1,
+      start: start,
+      end: start + steps.length - 1,
     };
-    offset += steps.length;
-    return entry;
   });
 
   // The viewBox height tracks the box, so resizing re-lays the plot out rather
@@ -1946,6 +1990,13 @@ async function init() {
   // scoped to this tab, and goes away when the tab does — which is the right
   // lifetime for "what I was drawing a moment ago".
   const CARRY_KEY = "ligand3d.switch.molblock";
+
+  const trajBox = el("trajectory");
+  if (trajBox) {
+    const syncTraj = () => { el("trajOpts").hidden = !trajBox.checked; };
+    trajBox.addEventListener("change", syncTraj);
+    syncTraj();
+  }
 
   const switchButton = el("switchFamily");
   if (switchButton)

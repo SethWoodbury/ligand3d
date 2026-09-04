@@ -109,7 +109,22 @@ def build(
     energy_window: Optional[float] = typer.Option(
         None, "--energy-window", help="Discard conformers this far (kcal/mol) above the best."
     ),
-    max_steps: int = typer.Option(500, "--max-steps", help="Optimizer step limit."),
+    max_steps: int = typer.Option(
+        500, "--max-steps",
+        help="Optimizer step limit, per method per conformer (not a total budget).",
+    ),
+    split_conformers: bool = typer.Option(
+        False, "--split-conformers",
+        help="Also write each conformer to its own file, _conf_0 being the lowest energy.",
+    ),
+    trajectory_every: int = typer.Option(
+        10, "--trajectory-every", min=1,
+        help="With --trajectory, keep every Nth frame. The final geometry is always kept.",
+    ),
+    no_align: bool = typer.Option(
+        False, "--no-align",
+        help="Leave conformers where the optimizer put them instead of superimposing them.",
+    ),
     seed: int = typer.Option(0xF00D, "--seed", help="Random seed for embedding."),
     threads: int = typer.Option(1, "--threads", "-j", min=1, help="Threads for backends that use them."),
     resname: Optional[str] = typer.Option(
@@ -238,6 +253,9 @@ def build(
         allow_charge_mismatch=allow_charge_mismatch,
         allow_proton_transfer=allow_proton_transfer,
         max_steps=max_steps,
+        split_conformers=split_conformers,
+        trajectory_every=trajectory_every,
+        align_conformers=not no_align,
         seed=seed,
         n_threads=threads,
         resname=resname,

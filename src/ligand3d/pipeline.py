@@ -98,6 +98,21 @@ class Settings:
     black box. The cost is real but small, and the geometry is unaffected.
     """
     trajectory: bool = False
+    trajectory_every: int = 10
+    """Keep every Nth optimizer frame. 500 individual structures is not a
+    trajectory anyone opens twice; every tenth still shows the path."""
+    trace_all_conformers: bool = True
+    """Give every kept conformer its own curve on the energy plot."""
+    max_traced_conformers: int = 12
+    """Above this, the plot stops being readable and the extra curves are
+    dropped rather than drawn on top of each other."""
+    split_conformers: bool = False
+    """Write each conformer to its own file, ordered by energy, rather than
+    one file with several models."""
+    align_conformers: bool = True
+    """Superimpose the kept conformers before writing. Without it they sit
+    wherever the optimizer left them, and opening the file shows a scattered
+    cloud rather than a comparison."""
     """Keep every step's coordinates and write them as a multi-model PDB."""
 
     params: bool = False
@@ -158,6 +173,8 @@ class Outcome:
     sdf_path: Path | None = None
     annotated_path: Path | None = None
     trajectory_path: Path | None = None
+    conformer_paths: list[Path] = field(default_factory=list)
+    """Per-conformer files, when split_conformers is on. Empty otherwise."""
     params_result: object | None = None
     notes: list[str] = field(default_factory=list)
     trace: list = field(default_factory=list)
@@ -180,6 +197,7 @@ class Outcome:
                         self.annotated_path, self.trajectory_path)
             if p is not None
         ]
+        paths.extend(self.conformer_paths)
         if self.params_result is not None:
             paths.extend(self.params_result.paths())
         return paths
@@ -297,9 +315,18 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
     else:
         notes.append(f"embedded {generated} conformer(s) via {settings.conf_method}")
 
-    # Tracing every conformer would produce an unreadable pile of curves, so
-    # only the first is traced; it is the one the graph shows.
-    traced_id = mol_3d.GetConformers()[0].GetId() if generated else -1
+    # Which conformers get a trace. One curve was the old default because a
+    # hundred is unreadable; but with a handful, seeing them separate is the
+    # point — that is how you notice one conformer taking a different path.
+    # Capped so that a large search cannot produce an unreadable plot.
+    _all_ids = [c.GetId() for c in mol_3d.GetConformers()]
+    if not generated:
+        traced_ids: list[int] = []
+    elif settings.trace_all_conformers:
+        traced_ids = _all_ids[: settings.max_traced_conformers]
+    else:
+        traced_ids = _all_ids[:1]
+    traced_id = traced_ids[0] if traced_ids else -1
     traces: dict[int, list] = []
     traces = {}
     frames: dict[int, list] = {}
@@ -310,8 +337,9 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
         """Minimize a set of conformers with one backend."""
         energies: dict[int, float] = {}
         results: dict[int, MinimizeResult] = {}
+        traced_set = set(traced_ids)
         for cid in conf_ids:
-            observe = cid == traced_id
+            observe = cid in traced_set
             try:
                 result = backend.minimize(
                     MinimizeJob(
@@ -323,7 +351,11 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
                         solvent=solvent if backend.caps.supports_solvation else None,
                         n_threads=settings.n_threads,
                         trace=settings.trace and observe,
-                        trajectory=settings.trajectory and observe,
+                        # Trajectory frames stay on the primary conformer.
+                        # Curves are cheap to overlay; a step-by-step file per
+                        # conformer per method is a pile nobody asked for.
+                        trajectory=settings.trajectory and cid == traced_id,
+                        trajectory_every=settings.trajectory_every,
                         stage=stage,
                     )
                 )
@@ -366,8 +398,15 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
         # Follow the survivors. The conformer traced through the search is
         # usually pruned away, and tracing an id that is no longer being
         # minimized silently produces an empty curve for every later stage.
-        if survivors and traced_id not in survivors:
-            traced_id = survivors[0]
+        # The traced set has to follow the narrowing, or the refinement stage
+        # records nothing: the conformers being traced were dropped, and the
+        # ones being refined are not traced. Keeping traced_ids in step is the
+        # whole reason stage 1 appears on the plot at all.
+        if survivors:
+            traced_ids = [c for c in traced_ids if c in survivors] or list(survivors)
+            traced_ids = traced_ids[: settings.max_traced_conformers]
+            if traced_id not in survivors:
+                traced_id = traced_ids[0]
         for stage, backend in enumerate(backends[1:], start=1):
             energies, results = run_stage(stage, backend, survivors)
             if not results:
@@ -392,6 +431,21 @@ def build(molecule: Molecule, settings: Settings) -> Outcome:
         max_keep=settings.max_keep or (settings.n_confs if settings.n_confs > 1 else 1),
     )
     final = conf_mod.subset(mol_3d, keep)
+
+    # Superimpose before anything is written. The optimizer leaves each
+    # conformer wherever it happened to converge, so a multi-model file opens
+    # in PyMOL as a scattered cloud; aligned, the differences are the point.
+    # Purely a rigid-body move: no coordinate is changed relative to the
+    # others within a conformer, so energies and stereo are untouched.
+    if settings.align_conformers and final.GetNumConformers() > 1:
+        try:
+            from rdkit.Chem import AllChem
+
+            AllChem.AlignMolConformers(final)
+            notes.append(f"aligned {final.GetNumConformers()} conformers for viewing")
+        except Exception as exc:  # never lose a good structure to a cosmetic step
+            notes.append(f"could not align conformers ({type(exc).__name__}); "
+                         "they are written as optimized")
     if len(keep) < len(results):
         notes.append(f"kept {len(keep)} of {len(results)} minimized conformers after pruning")
 
@@ -490,6 +544,64 @@ def _mlff_device(per_backend: dict[str, float]) -> str | None:
         return None
 
 
+def _conformer_slices(outcome: Outcome):
+    """One single-conformer molecule per kept conformer, lowest energy first.
+
+    The records are already energy-ordered by `prune`, so index 0 is the best
+    one — which is what makes `_conf_0` a promise rather than a filename.
+    """
+    from rdkit import Chem
+
+    slices = []
+    for index, record in enumerate(outcome.records):
+        single = Chem.Mol(outcome.mol_3d)
+        keep = Chem.Conformer(outcome.mol_3d.GetConformer(record.conf_id))
+        single.RemoveAllConformers()
+        single.AddConformer(keep, assignId=True)
+        slices.append((index, record, single))
+    return slices
+
+
+def _write_split_conformers(
+    outcome: Outcome, variant: Molecule, settings: Settings, base: Path,
+    resname: str, remarks: list[str],
+) -> None:
+    """Write each conformer to its own file, `<stem>_conf_<n>.<ext>`.
+
+    Numbered by energy rather than by RDKit's conformer id, so `_conf_0` is
+    always the lowest — the one you would open first. The ids are an internal
+    detail and are not stable across a prune.
+    """
+    formats = settings.formats
+    written: list[Path] = []
+
+    for index, record, single in _conformer_slices(outcome):
+        stem = f"{base.name}_conf_{index}"
+        target = base.with_name(stem)
+        one = [record.__class__(**{**record.__dict__,
+                                   "conf_id": single.GetConformer().GetId()})]
+        note = remarks + [f"CONFORMER {index} of {len(outcome.records)}"[:68]]
+
+        if "cif" in formats:
+            written.append(write_cif(target.with_suffix(".cif"), single,
+                                     records=one, resname=resname,
+                                     smiles=variant.smiles, extra_remarks=note))
+        if "pdb" in formats:
+            written.append(write_pdb(target.with_suffix(".pdb"), single,
+                                     records=one, resname=resname,
+                                     smiles=variant.smiles, extra_remarks=note))
+        if "sdf" in formats:
+            written.append(write_sdf(target.with_suffix(".sdf"), single,
+                                     records=one, name=f"{resname}_conf_{index}"))
+
+    outcome.conformer_paths = written
+    if written:
+        outcome.notes.append(
+            f"wrote {len(outcome.records)} conformer(s) to separate files, "
+            f"_conf_0 being the lowest energy"
+        )
+
+
 def _write_outputs(
     outcome: Outcome, variant: Molecule, settings: Settings, base: Path
 ) -> None:
@@ -497,6 +609,12 @@ def _write_outputs(
     resname = settings.resname or variant.name
     remarks = [f"SOURCE {variant.source}"[:68]]
     formats = settings.formats
+
+    # Separate files as well as the combined one, not instead of it: the
+    # multi-model file is still the thing to open when comparing, and losing
+    # it would be a surprise for anyone who has scripted against it.
+    if settings.split_conformers and len(outcome.records) > 1:
+        _write_split_conformers(outcome, variant, settings, base, resname, remarks)
 
     if "cif" in formats:
         outcome.cif_path = write_cif(

@@ -57,6 +57,13 @@ def atoms_to_conformer(atoms: "Atoms", mol: rdchem.Mol, conf_id: int = -1) -> No
         conf.SetAtomPosition(i, Point3D(float(x), float(y), float(z)))
 
 
+def _same_positions(a, b) -> bool:
+    """Whether two frames are the same geometry, to floating-point noise."""
+    import numpy as np
+
+    return a.shape == b.shape and bool(np.allclose(a, b, rtol=0, atol=1e-9))
+
+
 class ASEBackend:
     """Base class for ASE-calculator backends.
 
@@ -133,6 +140,14 @@ class ASEBackend:
 
         atoms_to_conformer(atoms, job.mol, job.conf_id)
 
+        # The converged geometry, whatever the sampling interval landed on.
+        # A trajectory that stops ten steps short of the answer is misleading
+        # in exactly the way a trajectory is supposed to prevent.
+        if job.trajectory:
+            final = atoms.get_positions().copy()
+            if not frames or not _same_positions(frames[-1], final):
+                frames.append(final)
+
         return MinimizeResult(
             energy=energy_ev * EV_TO_KCAL,
             converged=converged,
@@ -147,9 +162,18 @@ class ASEBackend:
         )
 
     def _observe(self, atoms, opt, job: MinimizeJob, trace: list, frames: list) -> None:
-        """Record one optimizer step. Attached to the ASE optimizer."""
+        """Record one optimizer step. Attached to the ASE optimizer.
+
+        The trace keeps every step, because that is the energy curve. Frames
+        are subsampled: five hundred structures is not a trajectory anyone
+        opens twice, and every tenth shows the same path. The last frame is
+        appended after the run regardless, so the file always ends on the
+        geometry that was actually kept.
+        """
         if job.trajectory:
-            frames.append(atoms.get_positions().copy())
+            every = max(1, int(getattr(job, "trajectory_every", 1) or 1))
+            if opt.get_number_of_steps() % every == 0:
+                frames.append(atoms.get_positions().copy())
         if not job.trace:
             return
         energy = float(atoms.get_potential_energy()) * EV_TO_KCAL
@@ -157,6 +181,7 @@ class ASEBackend:
         trace.append(
             TraceStep(
                 stage=job.stage,
+                conf_id=job.conf_id,
                 backend=self.caps.name,
                 step=len(trace),
                 energy=energy,

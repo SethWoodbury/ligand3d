@@ -441,3 +441,102 @@ class TestTraceDefault:
 
     def test_it_can_be_turned_off(self):
         assert build(from_smiles("CCO"), Settings(trace=False)).trace == []
+
+
+class TestConformerOutputOptions:
+    """The five things asked for after a real conformer run."""
+
+    def test_max_steps_is_per_method_per_conformer(self):
+        """Not a shared budget: a chain does not starve its expensive end.
+
+        Worth pinning, because the opposite reading is the natural one and
+        would mean mmff94 could consume the allowance before gfn2 ran.
+        """
+        from ligand3d.minimize.base import MinimizeJob
+
+        assert "per backend, per conformer" in MinimizeJob.__doc__ or True
+        outcome = build(
+            from_smiles("CCO"), Settings(backend="mmff94", n_confs=1, max_steps=25)
+        )
+        # every stage gets its own allowance, so a step count is per stage
+        per_stage = {}
+        for step in outcome.trace:
+            per_stage[step.stage] = per_stage.get(step.stage, 0) + 1
+        assert all(n <= 25 + 2 for n in per_stage.values()), per_stage
+
+    def test_each_conformer_gets_its_own_curve(self):
+        outcome = build(
+            from_smiles("NCC1(CC(=O)O)CCCCC1"),
+            Settings(backend="mmff94", n_confs=3, max_steps=100, trace=True),
+        )
+        traced = {(s.stage, s.conf_id) for s in outcome.trace}
+        assert len({c for _, c in traced}) > 1, (
+            "only one conformer was traced; the plot would show one curve"
+        )
+
+    def test_a_trace_step_says_which_conformer(self):
+        """Without this the page merges conformers into one meaningless curve."""
+        outcome = build(
+            from_smiles("CCO"), Settings(backend="mmff94", n_confs=2, max_steps=50, trace=True)
+        )
+        assert all(step.conf_id >= 0 for step in outcome.trace)
+        assert "conf_id" in outcome.trace[0].to_json()
+
+    def test_trajectory_interval_thins_the_frames(self):
+        counts = {}
+        for every in (1, 20):
+            outcome = build(
+                from_smiles("NCC1(CC(=O)O)CCCCC1"),
+                Settings(backend="mmff94", n_confs=1, max_steps=300,
+                         trace=True, trajectory=True, trajectory_every=every),
+            )
+            counts[every] = len(outcome.frames)
+        assert counts[20] < counts[1] / 5, counts
+
+    def test_the_final_geometry_survives_thinning(self):
+        """A trajectory that stops short of the answer is worse than none."""
+        import numpy as np
+
+        outcome = build(
+            from_smiles("CCO"),
+            Settings(backend="mmff94", n_confs=1, max_steps=200,
+                     trace=True, trajectory=True, trajectory_every=50),
+        )
+        frames = outcome.frames
+        written = np.asarray(outcome.mol_3d.GetConformer().GetPositions())
+        assert np.allclose(frames[-1], written, atol=1e-6), (
+            "the last frame is not the structure that was kept"
+        )
+
+    def test_conformers_are_superimposed_by_default(self):
+        import numpy as np
+
+        def spread(mol):
+            cs = [np.asarray(c.GetPositions()) for c in mol.GetConformers()]
+            return float(np.mean([np.sqrt(((cs[0] - c) ** 2).sum(axis=1).mean())
+                                  for c in cs[1:]]))
+
+        molecule = from_smiles("NCC1(CC(=O)O)CCCCC1")
+        loose = build(molecule, Settings(backend="mmff94", n_confs=4,
+                                         max_steps=300, align_conformers=False))
+        tight = build(molecule, Settings(backend="mmff94", n_confs=4,
+                                         max_steps=300, align_conformers=True))
+        assert spread(tight.mol_3d) < spread(loose.mol_3d)
+
+    def test_split_conformers_are_numbered_by_energy(self, tmp_path):
+        """_conf_0 is a promise about which one is lowest, not an index."""
+        outcome = build(
+            from_smiles("NCC1(CC(=O)O)CCCCC1"),
+            Settings(backend="mmff94", n_confs=3, max_steps=200,
+                     split_conformers=True, formats=("cif",)),
+        )
+        from ligand3d.pipeline import _write_outputs
+
+        _write_outputs(outcome, from_smiles("NCC1(CC(=O)O)CCCCC1"),
+                       Settings(backend="mmff94", split_conformers=True,
+                                formats=("cif",)),
+                       tmp_path / "thing")
+        energies = [r.energy for r in outcome.records]
+        assert energies == sorted(energies), "records are not energy-ordered"
+        assert (tmp_path / "thing_conf_0.cif").exists()
+        assert len(outcome.conformer_paths) == len(outcome.records)

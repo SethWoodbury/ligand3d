@@ -67,6 +67,19 @@ class _RDKitForceField:
                 steps = job.max_steps if status != 0 else -1
                 trace, frames = [], []
             energy = ff.CalcEnergy()
+        # The converged geometry, whatever the sampling interval landed on. Its
+        # own import and conformer lookup, because the untraced branch above
+        # defines neither — a trajectory ending ten steps short of the answer
+        # is misleading in exactly the way a trajectory should prevent.
+        if job.trajectory:
+            import numpy as _np
+
+            final = _np.asarray(
+                job.mol.GetConformer(job.conf_id).GetPositions(), dtype=float
+            ).copy()
+            if not frames or not _np.allclose(frames[-1], final, rtol=0, atol=1e-9):
+                frames.append(final)
+
         return MinimizeResult(
             energy=float(energy),
             converged=(status == 0),
@@ -106,8 +119,13 @@ class _RDKitForceField:
         conf = job.mol.GetConformer(job.conf_id)
         status = 1
 
+        every = max(1, int(getattr(job, "trajectory_every", 1) or 1))
+
         def record(step: int) -> None:
-            if job.trajectory:
+            # Subsampled like the ASE path, and for the same reason: a file of
+            # five hundred structures is not a trajectory anyone opens twice.
+            # The final geometry is appended after the loop regardless.
+            if job.trajectory and step % every == 0:
                 frames.append(np.asarray(conf.GetPositions(), dtype=float).copy())
             if not job.trace:
                 return
@@ -116,6 +134,7 @@ class _RDKitForceField:
             trace.append(
                 TraceStep(
                     stage=job.stage,
+                    conf_id=job.conf_id,
                     backend=self.caps.name,
                     step=step,
                     energy=energy,
