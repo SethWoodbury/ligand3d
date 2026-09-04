@@ -42,3 +42,6 @@ uv.lock
 # built container releases
 dist/
 *.sif
+
+# personal working notes, not for the repo
+CLAUDE.md
