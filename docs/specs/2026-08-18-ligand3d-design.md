@@ -1,7 +1,13 @@
 # ligand3d — design
 
 **Date:** 2026-08-18
-**Status:** implemented. See the addendum at the end for what changed in practice.
+**Status:** historical. This is the original design note, kept for the record.
+
+> ⚠️ **Do not read this as documentation.** It describes the project as planned in August
+> 2026 and is deliberately not updated. Several things it states are no longer true — it
+> has PDB as the output format (mmCIF is the default), and lists containers, DFT and
+> MACE-POLAR among the non-goals, all three of which shipped. For what ligand3d does now,
+> see [the documentation index](../README.md).
 
 ## Purpose
 

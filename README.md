@@ -6,9 +6,17 @@ the level of theory you pick, with its stereochemistry verified rather than assu
 
 <p align="center">
   <img src="docs/assets/pipeline.svg" width="100%"
-       alt="Gabapentin drawn in 2D, then embedded with ETKDGv3, then two MMFF94 optimizer
-            snapshots, ending at the converged 3D structure. Energies fall from 33.3 to
-            -13.4 kcal/mol across the trajectory.">
+       alt="Gabapentin drawn in 2D, then hydrogens added and embedded with ETKDGv3, then
+            an MMFF94 optimizer snapshot at 12 steps, ending at the converged geometry.
+            Energies fall from 19.3 to -12.7 kcal/mol across the trajectory.">
+</p>
+<p align="center">
+  <img src="docs/assets/structure.png" width="72%"
+       alt="Ball-and-stick render of the converged gabapentin structure, as written to
+            the mmCIF file and opened in PyMOL.">
+  <br>
+  <sub><b>…and out comes a real 3D structure.</b> This is the mmCIF that run wrote,
+  opened in PyMOL — nothing redrawn for the picture.</sub>
 </p>
 
 It writes **mmCIF and SDF** by default — mmCIF because it carries bond orders and
