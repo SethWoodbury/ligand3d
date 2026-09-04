@@ -1603,15 +1603,32 @@ molecule.
 
 ## Built on
 
-[RDKit](https://www.rdkit.org/) (ETKDGv3 embedding, MMFF94/UFF),
-[tblite](https://github.com/tblite/tblite) (GFN1/GFN2-xTB),
-[xtb](https://github.com/grimme-lab/xtb) and [CREST](https://github.com/crest-lab/crest),
-[dimorphite-dl](https://github.com/durrantlab/dimorphite_dl) (protonation states),
-[MACE](https://github.com/ACEsuit/mace) and
-[AIMNet2](https://github.com/isayevlab/aimnetcentral) (ML potentials),
-[ASE](https://wiki.fysik.dtu.dk/ase/) (optimizers),
-[JSME](https://jsme-editor.github.io/) and
-[Ketcher](https://github.com/epam/ketcher) (2D sketchers).
+**Always present**
+
+- [RDKit](https://www.rdkit.org/) — ETKDGv3 embedding, MMFF94/UFF, 2D depiction
+- [gemmi](https://gemmi.readthedocs.io/) — mmCIF, which is the default output
+- [Typer](https://typer.tiangolo.com/) and [Rich](https://rich.readthedocs.io/) — the CLI
+
+**Optional, by tier**
+
+- [tblite](https://github.com/tblite/tblite) — GFN1/GFN2-xTB
+- [xtb](https://github.com/grimme-lab/xtb) — GFN-FF, and
+  [CREST](https://github.com/crest-lab/crest) for conformer search
+- [g-xTB](https://github.com/grimme-lab/g-xtb) — a patched xtb build; beta
+- [ASE](https://wiki.fysik.dtu.dk/ase/) — the optimizer every non-RDKit backend runs through
+- [MACE](https://github.com/ACEsuit/mace) — MACE-OFF, MACE-MP, MACE-OMOL, MACE-POLAR,
+  the last needing [graph_electrostatics](https://github.com/WillBaldwin0/graph_electrostatics)
+- [fairchem](https://github.com/FAIR-Chem/fairchem) — eSEN, UMA, AllScAIP
+- [AIMNet2](https://github.com/isayevlab/aimnetcentral)
+- [ORCA](https://orcaforum.kofo.mpg.de) — the DFT and Hartree-Fock tier
+- [dimorphite-dl](https://github.com/durrantlab/dimorphite_dl) — protonation states
+- [py2opsin](https://github.com/JacksonBurns/py2opsin) wrapping
+  [OPSIN](https://github.com/dan2097/opsin) — systematic names, offline
+- [JSME](https://jsme-editor.github.io/) — the browser sketcher
+
+[Ketcher](https://github.com/epam/ketcher) is **not** used — it was evaluated and rejected;
+see the note in the sketcher section for why. It appeared in this list for a while, which
+was simply wrong.
 
 ## Author
 
