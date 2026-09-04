@@ -299,10 +299,14 @@ class TestTheReadmeMatchesTheCode:
     longer exist.
     """
 
-    README = Path(__file__).resolve().parents[1] / "README.md"
+    ROOT = Path(__file__).resolve().parents[1]
+    README = ROOT / "README.md"
+    #: The speed table moved here when the README was split. A guard that does
+    #: not follow its subject stops being a guard.
+    METHODS_DOC = ROOT / "docs" / "methods.md"
 
     def test_the_backend_speed_table_matches_the_catalog(self):
-        text = self.README.read_text()
+        text = self.METHODS_DOC.read_text()
         speeds = {m.id: m.speed for m in build_catalog()}
         for backend in ("mmff94", "uff", "gfnff", "gfn2", "gfn1"):
             row = re.search(rf"^\| `{re.escape(backend)}` \|.*$", text, re.M)
@@ -365,8 +369,10 @@ class TestTheReadmeMatchesTheCode:
         assert "--no-such-flag" not in known
 
     def test_the_intro_does_not_claim_pdb_is_the_default(self):
-        head = self.README.read_text()[:1200]
-        assert "mmCIF by default" in head
+        """mmCIF and SDF are what a bare `build` writes; PDB is opt-in."""
+        head = self.README.read_text()[:1400]
+        assert "mmCIF" in head and "default" in head
+        assert "PDB by default" not in head
 
 
 def test_polar_models_have_a_charge_channel():

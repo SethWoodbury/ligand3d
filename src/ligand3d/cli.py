@@ -39,7 +39,9 @@ def build(
         ..., help="SMILES string, or a path to a .mol/.sdf/.smi file."
     ),
     output: Optional[Path] = typer.Option(
-        None, "--output", "-o", help="Output .pdb path. Defaults to <name>.pdb."
+        None, "--output", "-o",
+        help="Output path. The extension picks a format and is added to the "
+             "defaults (mmCIF + SDF); without one, <name>.cif and <name>.sdf."
     ),
     backend: str = typer.Option(
         "mmff94",
