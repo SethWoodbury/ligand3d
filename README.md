@@ -536,9 +536,11 @@ flowchart LR
   style B fill:#fef7e0,stroke:#fbbc04,color:#000
 ```
 
-ligand3d prefers the lab's verified **ORCA 6.1.1** install and falls back to the 2019
-4.1.1 if that is missing, so a machine with only the old one still works — with eight
-methods instead of fifteen, which it *says* rather than discovering mid-job:
+ligand3d uses the lab's verified **ORCA 6.1.1**. The 2019 4.1.1 at
+`/net/software/orca/latest` is **deprecated and no longer probed**: falling back to it
+silently would halve the available methods, and silently is the problem. If you genuinely
+want an older ORCA, say so with `LIGAND3D_ORCA_BIN` — it still works for the composites,
+warns that it is old, and names what it cannot do rather than discovering it mid-job:
 
 ```
 orca-r2scan3c: r2SCAN-3c needs ORCA 5.0+; this one is 4.1

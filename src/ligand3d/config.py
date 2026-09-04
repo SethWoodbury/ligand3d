@@ -282,10 +282,14 @@ _CREST_PROBE = [
 #: per-method version gate reports rather than discovering at run time.
 _ORCA_PROBE = [
     Path("/net/software/lab/quantum_chem/bin/orca"),
-    Path("/net/software/orca/latest/orca"),
     Path("/software/orca/latest/orca"),
     CACHE_DIR / "orca" / "orca",
 ]
+#: Deliberately not probed: /net/software/orca/latest, which is 4.1.1 from
+#: 2019. It predates r2SCAN, r2SCAN-3c, D4, wB97X-3c and M06-2X, so falling
+#: back to it silently halves the available methods — and silently is the
+#: problem. Anyone who genuinely wants it can say so with LIGAND3D_ORCA_BIN,
+#: and the version gate will then explain what it cannot do.
 _XTB_LIB_PROBE = [
     Path("/home/woodbuse/conda/envs/qcb-xtb/lib"),
 ]

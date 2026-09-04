@@ -149,6 +149,31 @@ METHODS: tuple[Method, ...] = (
 METHODS_BY_ALIAS = {m.alias: m for m in METHODS}
 
 
+#: Below this, half the methods here do not exist. ORCA 5 introduced r2SCAN
+#: and D4; ORCA 6 added wB97X-3c.
+MODERN_ORCA = (5, 0)
+
+_warned_old_orca = False
+
+
+def _warn_once_about_old_orca(have: tuple[int, int], path) -> None:
+    """Say once, on stderr, that this ORCA is old enough to matter."""
+    global _warned_old_orca
+    if _warned_old_orca:
+        return
+    _warned_old_orca = True
+    import warnings
+
+    warnings.warn(
+        f"ORCA {have[0]}.{have[1]} at {path} predates r2SCAN, D4 and wB97X-3c, "
+        f"so {len([m for m in METHODS if m.min_orca > have])} of "
+        f"{len(METHODS)} methods are unavailable. Point LIGAND3D_ORCA_BIN at a "
+        f"newer ORCA to use them.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+
 #: The IPD's quantum-chemistry tree records what it installed, and whether the
 #: install was actually verified. Reading that is both faster and better
 #: evidence than re-deriving the version from a banner.
@@ -324,6 +349,11 @@ class OrcaBackend(ASEBackend):
         # can act on, several minutes into a job. Better to refuse up front and
         # name the reason.
         have = orca_version()
+        if have is not None and have < MODERN_ORCA:
+            # Not a refusal — the composites really do work on 4.x — but an old
+            # ORCA halves what is available, and finding that out by noticing
+            # absent methods is worse than being told.
+            _warn_once_about_old_orca(have, resolution.path)
         if have is not None and have < self.method.min_orca:
             want = ".".join(str(n) for n in self.method.min_orca)
             return Availability(
