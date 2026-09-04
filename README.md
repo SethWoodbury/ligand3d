@@ -128,6 +128,55 @@ environments, or use the containers, which are built one per family for exactly 
 `ligand3d doctor` tells you what is missing and the command to fix it, so you do not have
 to work the table backwards.
 
+## Licensing, and what that means for the weights
+
+**ligand3d itself is MIT.** Use it, fork it, ship it.
+
+**The models it can run are not all MIT, and some are academic-use-only.** ligand3d
+never redistributes weights — it resolves them from wherever you have them — so this is
+a constraint on *you*, not on this repository, and it is easy to miss:
+
+| Method | Licence | Commercial use |
+|---|---|---|
+| MMFF94, UFF (RDKit) | BSD-3 | yes |
+| GFN1/GFN2-xTB (tblite), GFN-FF (xtb) | LGPL-3.0 | yes |
+| g-xTB | LGPL-3.0, **beta** | yes, but results are provisional |
+| AIMNet2 | MIT | yes |
+| **MACE-OFF, MACE-OMOL, MACE-POLAR** | **[ASL](https://github.com/gabor1/ASL)** | **no — academic only** |
+| **eSEN, UMA, AllScAIP** | **FAIR Chemistry License v1** | **no — academic only** |
+| ORCA | free for academic use; [separate licence](https://orcaforum.kofo.mpg.de) otherwise | see their terms |
+
+ASL is not an open-source licence: it is GPLv2-derived with a non-commercial clause. The
+FAIR Chemistry License is similar in effect. If your work is commercial, the classical,
+semi-empirical and AIMNet2 tiers are yours; the MACE and fairchem tiers are not.
+
+The table above is the reference. At the IPD the lab model registry records the licence
+per checkpoint and will answer programmatically, which is what to use if you are building
+something that has to decide:
+
+```python
+import sys; sys.path.insert(0, "/net/databases/huggingface/mlFF_models")
+from mlff_registry import info
+info("mace-polar")["licence"]        # 'ASL (academic use only)'
+```
+
+`ligand3d models --verbose` prints each method's training data and reference, though not
+yet its licence.
+
+## Citing
+
+If ligand3d is useful in published work, please cite the **methods**, which are other
+people's research, rather than this tool. `ligand3d models --verbose` prints the reference
+for whichever method you ran. The ones most likely to matter:
+
+- **MACE-OFF / MACE-POLAR** — Kovács et al., and Batatia et al., *MACE-POLAR-1*
+  ([arXiv:2602.19411](https://arxiv.org/abs/2602.19411))
+- **eSEN / UMA / OMol25** — Meta FAIR Chemistry, the OMol25 dataset and models
+- **GFN2-xTB / GFN-FF / g-xTB** — Grimme and co-workers
+- **ORCA** — Neese, and the functional and dispersion correction you actually used, which
+  is why each level of theory has its own backend name here
+- **RDKit** and **ETKDGv3** (Riniker & Landrum) for the embedding
+
 ## Why this exists
 
 Getting from a drawing to a usable 3D ligand is a five-minute job that everyone

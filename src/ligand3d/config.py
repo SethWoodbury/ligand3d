@@ -468,6 +468,7 @@ def find_rosetta_residue_types() -> Path | None:
     return resolve_rosetta_residue_types().path
 
 
+@lru_cache(maxsize=1)
 def resolve_xtb() -> Resolution:
     return resolve_binary("xtb", _XTB_PROBE)
 
@@ -481,10 +482,12 @@ _GXTB_PROBE = [
 ]
 
 
+@lru_cache(maxsize=1)
 def resolve_gxtb() -> Resolution:
     return resolve_binary("gxtb", _GXTB_PROBE)
 
 
+@lru_cache(maxsize=1)
 def resolve_crest() -> Resolution:
     return resolve_binary("crest", _CREST_PROBE)
 
@@ -532,6 +535,16 @@ def _is_quantum_orca(path: Path) -> bool:
         return False
 
 
+#: Cached like resolve_weights, and for the same reason: these stat a network
+#: filesystem, and every backend asks. Fifteen ORCA methods each resolving the
+#: same binary — which now also reads a wrapper script to validate it — turned
+#: building the backend list into seconds of repeated NFS work, which the
+#: sketcher waits on before it can fill its menus.
+#:
+#: The trade is that installing a binary while a process is running is not
+#: noticed until it restarts. For a CLI invocation that is no trade at all, and
+#: for the server a restart is the honest way to pick up a new install anyway.
+@lru_cache(maxsize=1)
 def resolve_orca() -> Resolution:
     return resolve_binary("orca", _ORCA_PROBE, validate=_is_quantum_orca)
 
