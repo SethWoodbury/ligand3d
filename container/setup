@@ -1,0 +1,66 @@
+# shellcheck shell=bash
+#
+# ligand3d, set up in one line. Meant to be SOURCED, not executed:
+#
+#     source /net/software/lab/ligand3d/setup
+#
+# Puts this directory on PATH for the current shell and appends the same line
+# to your shell's rc file so it survives a new terminal. Then `ligand3d sketch`
+# works immediately.
+#
+# Idempotent: run it twice and nothing is added twice. The line it writes is
+# marked, so it is easy to find and easy to delete.
+
+_l3d_setup() {
+    # Where this file lives, which is the directory to put on PATH. Resolved
+    # rather than assumed, so a copy staged somewhere else still works.
+    local src dir rc marker line already
+    if [[ -n ${BASH_SOURCE[0]:-} ]]; then
+        src="${BASH_SOURCE[0]}"
+    elif [[ -n ${ZSH_VERSION:-} ]]; then
+        src="${(%):-%N}"
+    else
+        echo "ligand3d: cannot tell where this script is; add the PATH line by hand." >&2
+        return 1
+    fi
+    dir="$(cd -- "$(dirname -- "$(readlink -f -- "$src")")" && pwd)"
+
+    if [[ ! -x $dir/ligand3d ]]; then
+        echo "ligand3d: no launcher in $dir — is this the right directory?" >&2
+        return 1
+    fi
+
+    # Executed rather than sourced: a child process cannot change this shell's
+    # PATH, so saying so beats appearing to work and then not.
+    if [[ ${BASH_SOURCE[0]:-} == "${0:-}" ]]; then
+        echo "ligand3d: run this as
+    source $dir/setup
+so it can set PATH in this shell." >&2
+        return 1
+    fi
+
+    marker="# ligand3d (added by $dir/setup)"
+    line="export PATH=$dir:\$PATH"
+
+    case ":$PATH:" in
+        *":$dir:"*) ;;
+        *) export PATH="$dir:$PATH" ;;
+    esac
+
+    if [[ -n ${ZSH_VERSION:-} ]]; then rc="$HOME/.zshrc"; else rc="$HOME/.bashrc"; fi
+    already=0
+    [[ -f $rc ]] && grep -qF "$dir" "$rc" && already=1
+
+    if [[ $already == 0 ]]; then
+        printf '\n%s\n%s\n' "$marker" "$line" >> "$rc"
+        echo "ligand3d: added to $rc"
+    else
+        echo "ligand3d: already in $rc"
+    fi
+
+    echo "ligand3d: ready — try 'ligand3d sketch'"
+    command -v ligand3d
+}
+
+_l3d_setup
+unset -f _l3d_setup

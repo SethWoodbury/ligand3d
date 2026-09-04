@@ -106,6 +106,8 @@ for family in $FAMILIES; do
 done
 
 install -m 0755 "$HERE/ligand3d" "$WORK/ligand3d"
+# Sourced by a newcomer to put this directory on PATH and keep it there.
+install -m 0644 "$HERE/setup" "$WORK/setup"
 
 # A second name for the same launcher, so two installs can be addressed
 # unambiguously when both are on PATH. The launcher resolves its own directory
