@@ -348,7 +348,8 @@
         <input type="text" id="importQuery" spellcheck="false"
                placeholder="import by name, SMILES, InChI or CID — e.g. 3-Cyano-7-ethoxycoumarin">
         <select id="importTemplate" title="start from a common organic scaffold">
-          <option value="">Organic scaffold template…</option>
+          <option value="">Template</option>
+          <option value="" disabled>— organic scaffold templates —</option>
         </select>
         <button class="ghost" id="importBtn">Import</button>
       </div>
@@ -647,8 +648,8 @@
         </div>
         <div class="row two">
           <div>
-            <label for="energy_window">Energy window</label>
-            <input type="number" id="energy_window" step="0.5" min="0" placeholder="none">
+            <label for="energy_window" title="Discard conformers more than this many kcal/mol above the lowest one found. Blank keeps every conformer that survives pruning.">Energy window <span class="note">kcal/mol above the best</span></label>
+            <input type="number" id="energy_window" step="0.5" min="0" placeholder="keep all">
           </div>
           <div>
             <label for="stereo_mode">Undefined stereo</label>
@@ -660,7 +661,7 @@
           </div>
         </div>
         <div class="checks">
-          <label><input type="checkbox" id="largest_fragment"> largest fragment only</label>
+          <label title="A salt or solvate parses as several disconnected molecules. This keeps the one with the most heavy atoms and discards the rest — usually the counterion. The run log names what was dropped."><input type="checkbox" id="largest_fragment"> largest fragment only <span class="note">(drops counterions)</span></label>
           <label><input type="checkbox" id="allow_charge_mismatch"> allow charge mismatch</label>
           <label><input type="checkbox" id="allow_proton_transfer"> allow proton transfer</label>
         </div>
@@ -1028,7 +1029,8 @@ function populateTemplates(data) {
   updateImportPlaceholder();
 
   const select = el("importTemplate");
-  const options = ['<option value="">Organic scaffold template…</option>'];
+  const options = ['<option value="">Template</option>',
+                   '<option value="" disabled>\u2014 organic scaffold templates \u2014</option>'];
   (data.templates || []).forEach((t) => {
     options.push('<option value="' + t.name + '" title="' + esc(t.note) + '">' +
       t.name + "</option>");
