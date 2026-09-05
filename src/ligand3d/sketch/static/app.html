@@ -154,12 +154,19 @@
   input[type=text], select { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .checks { display: flex; flex-wrap: wrap; gap: .35rem 1rem; margin: .1rem 0 .55rem; }
-  .checks label {
+  /* A checkbox with an optional trailing note. `.checks label` is the row
+     inside a group; `label.check` is the same thing standing alone, which was
+     used in the markup before it existed here. */
+  .checks label, label.check {
     display: flex; align-items: center; gap: .35rem; margin: 0;
     font-weight: 440; font-size: .8rem; cursor: pointer;
   }
-  .checks input { margin: 0; }
+  label.check { margin: 0 0 .4rem; }
+  .checks input, label.check input { margin: 0; flex: none; }
   .note { color: var(--muted); font-size: .74rem; margin: -.3rem 0 .55rem; }
+  /* Inline inside a label the note is a flex item, so the block margins that
+     position it *under* a field push it out of line with the checkbox. */
+  label .note { margin: 0; }
   .pillbtn {
     display: inline-block; cursor: pointer; font-family: ui-monospace, monospace;
     font-size: .74rem; color: var(--fg);
@@ -536,7 +543,8 @@
         </div>
         <div class="note">
           Tracing draws the curve below and reports the change per step. The trajectory is
-          written as <code>&lt;name&gt;_traj.pdb</code>, one MODEL per step.
+          written as <code>&lt;name&gt;_traj.pdb</code>, one MODEL per kept frame — every
+            tenth step by default, and the converged geometry is always last.
         </div>
 
         <!-- One control rather than two checkboxes: these are three places to
@@ -648,7 +656,7 @@
         </div>
         <div class="row two">
           <div>
-            <label for="energy_window" title="Discard conformers more than this many kcal/mol above the lowest one found. Blank keeps every conformer that survives pruning.">Energy window <span class="note">kcal/mol above the best</span></label>
+            <label for="energy_window" title="Discard conformers more than this many kcal/mol above the lowest one found. Blank keeps every conformer that survives pruning.">Energy window <span class="note">kcal/mol</span></label>
             <input type="number" id="energy_window" step="0.5" min="0" placeholder="keep all">
           </div>
           <div>
