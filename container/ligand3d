@@ -86,21 +86,61 @@ fi
 # line about having no browser — which is true in there and beside the point
 # out here. It still prints the URL, and the ssh -L hint when the session is
 # remote, which is the case no local browser can help with.
-open_when_ready () {
-    local candidates=(${1:-8765 8766 8767 8768 8769}) opener="" p=""
-    for try in xdg-open gio open firefox google-chrome chromium; do
-        command -v "$try" >/dev/null 2>&1 && { opener="$try"; break; }
+#
+# A Chromium-family browser is opened against a profile of our own rather than
+# through xdg-open. Handing a URL to `chrome` normally opens a tab in the
+# running browser, which is harmless -- but that depends on the singleton files
+# in the user's Chrome profile naming a live process. When they do not (Chrome
+# was killed, crashed, or was OOM'd) Chrome takes ownership of the profile
+# instead, so the sketcher's window *is* the browser and closing it quits Chrome
+# and every unrelated tab with it. A local tool must not be able to do that.
+#
+# LIGAND3D_BROWSER=system restores the plain xdg-open behaviour; =none opens
+# nothing. Kept in step with src/ligand3d/sketch/browser.py, which does the same
+# for `ligand3d sketch` run from a checkout.
+chromium_binary () {
+    local default=""
+    [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || return 1
+    default=$(xdg-settings get default-web-browser 2>/dev/null | tr 'A-Z' 'a-z')
+    if [[ -n $default && $default != *chrome* && $default != *chromium* \
+          && $default != *brave* && $default != *edge* ]]; then
+        return 1        # their default is something else; do not drag Chrome in
+    fi
+    local try=""
+    for try in google-chrome google-chrome-stable chromium chromium-browser \
+               brave-browser microsoft-edge; do
+        command -v "$try" >/dev/null 2>&1 && { echo "$try"; return 0; }
     done
-    [[ -n $opener ]] || return 0        # nothing to open with; the URL stands
+    return 1
+}
+
+open_when_ready () {
+    local candidates=(${1:-8765 8766 8767 8768 8769}) opener="" p="" chrome=""
+    local mode="${LIGAND3D_BROWSER:-auto}"
+    [[ $mode == none ]] && return 0
     [[ -n ${SSH_CONNECTION:-} ]] && return 0   # a browser here is the wrong screen
+
+    [[ $mode != system ]] && chrome=$(chromium_binary) || true
+    if [[ -z $chrome ]]; then
+        for try in xdg-open gio open firefox google-chrome chromium; do
+            command -v "$try" >/dev/null 2>&1 && { opener="$try"; break; }
+        done
+        [[ -n $opener ]] || return 0    # nothing to open with; the URL stands
+    fi
 
     for _ in $(seq 1 120); do
         for p in "${candidates[@]}"; do
             if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
                 exec 3<&- 2>/dev/null
-                [[ $opener == gio ]] && set -- open "http://127.0.0.1:$p/" \
-                                     || set -- "http://127.0.0.1:$p/"
-                "$opener" "$@" >/dev/null 2>&1 &
+                if [[ -n $chrome ]]; then
+                    "$chrome" --user-data-dir="${LIGAND3D_CACHE:-$HOME/.cache/ligand3d}/browser" \
+                              --no-first-run --no-default-browser-check --new-window \
+                              "http://127.0.0.1:$p/" >/dev/null 2>&1 &
+                else
+                    [[ $opener == gio ]] && set -- open "http://127.0.0.1:$p/" \
+                                         || set -- "http://127.0.0.1:$p/"
+                    "$opener" "$@" >/dev/null 2>&1 &
+                fi
                 return 0
             fi
         done

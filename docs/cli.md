@@ -69,4 +69,24 @@ These are `build` flags, not global ones — checked against `--help`, not assum
 `minimize` takes the ones that describe the calculation instead: `-b/--backend`,
 `--solvent`, `--max-steps`, `--threads`, `--trajectory`, `--no-trace`.
 
+### Which browser `sketch` opens
+
+On a Chromium-family default browser, `sketch` opens a window against a profile of its
+own under `~/.cache/ligand3d/browser` rather than joining your running browser.
+
+That is deliberate. Handing a URL to `chrome` usually opens a tab, but it relies on the
+singleton files in your Chrome profile naming a live process. If Chrome was killed,
+crashed or was OOM-killed, those go stale and the next `chrome <url>` **takes ownership
+of the profile** — the sketcher's window becomes the browser, so closing it quits Chrome
+and every unrelated tab with it. A local tool should not be able to do that, so it does
+not share your profile at all. Firefox and other defaults are opened normally.
+
+| `LIGAND3D_BROWSER` | |
+|---|---|
+| unset / `auto` | the isolated window described above |
+| `system` | hand the URL to your desktop's default browser, as before |
+| `none` | open nothing; just print the URL |
+
+Nothing is opened over SSH either way — forward the port and open it on your own machine.
+
 Driving all of this from an agent: [AGENTS.md](../AGENTS.md).

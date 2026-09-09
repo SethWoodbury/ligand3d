@@ -458,6 +458,94 @@ class TestSessionAPI:
         assert exc.value.code == 404
 
 
+class TestOpeningTheBrowser:
+    """The sketcher must not be able to take the user's browser session down.
+
+    Handing a URL to `chrome` normally opens a tab in the running browser. It
+    does that by way of three singleton files in the user's Chrome profile; when
+    those name a dead process -- Chrome was killed, crashed, or was OOM'd --
+    Chrome takes ownership of the profile instead. The sketcher's window is then
+    the browser, and closing it quits Chrome and every unrelated tab with it.
+    This happened on a real machine, so it gets tests.
+    """
+
+    @staticmethod
+    def _browser(monkeypatch, *, default="google-chrome.desktop", display=":0"):
+        import subprocess
+
+        from ligand3d.sketch import browser
+
+        monkeypatch.setenv("DISPLAY", display) if display else monkeypatch.delenv(
+            "DISPLAY", raising=False
+        )
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.setattr(browser.shutil, "which", lambda n: f"/usr/bin/{n}")
+
+        class Result:
+            stdout = default
+
+        monkeypatch.setattr(browser.subprocess, "run", lambda *a, **k: Result())
+        launched: list[list[str]] = []
+        monkeypatch.setattr(
+            browser.subprocess, "Popen", lambda cmd, **k: launched.append(cmd)
+        )
+        fallback: list[str] = []
+        monkeypatch.setattr(browser.webbrowser, "open", lambda u: fallback.append(u) or True)
+        return browser, launched, fallback
+
+    def test_chrome_gets_a_profile_of_our_own(self, monkeypatch):
+        browser, launched, fallback = self._browser(monkeypatch)
+        monkeypatch.delenv("LIGAND3D_BROWSER", raising=False)
+        assert browser.open_url("http://127.0.0.1:8765/") is True
+        assert launched, "nothing was launched"
+        cmd = launched[0]
+        profile = next(a for a in cmd if a.startswith("--user-data-dir="))
+        assert profile.endswith("/browser"), profile
+        # The whole point: never the user's own profile.
+        assert ".config/google-chrome" not in profile
+        assert not fallback, "should not have gone through webbrowser"
+
+    def test_system_mode_hands_off_to_the_desktop(self, monkeypatch):
+        browser, launched, fallback = self._browser(monkeypatch)
+        monkeypatch.setenv("LIGAND3D_BROWSER", "system")
+        assert browser.open_url("http://127.0.0.1:8765/") is True
+        assert not launched
+        assert fallback == ["http://127.0.0.1:8765/"]
+
+    def test_none_mode_opens_nothing(self, monkeypatch):
+        browser, launched, fallback = self._browser(monkeypatch)
+        monkeypatch.setenv("LIGAND3D_BROWSER", "none")
+        assert browser.open_url("http://127.0.0.1:8765/") is False
+        assert not launched and not fallback
+
+    def test_a_firefox_user_is_left_alone(self, monkeypatch):
+        """Chrome being installed is not a reason to open the sketcher in it."""
+        browser, launched, fallback = self._browser(
+            monkeypatch, default="firefox.desktop"
+        )
+        monkeypatch.delenv("LIGAND3D_BROWSER", raising=False)
+        assert browser.open_url("http://127.0.0.1:8765/") is True
+        assert not launched
+        assert fallback == ["http://127.0.0.1:8765/"]
+
+    def test_no_display_means_no_direct_launch(self, monkeypatch):
+        browser, launched, _ = self._browser(monkeypatch, display=None)
+        monkeypatch.delenv("LIGAND3D_BROWSER", raising=False)
+        browser.open_url("http://127.0.0.1:8765/")
+        assert not launched, "launched a GUI browser with no display"
+
+    def test_the_launcher_agrees_with_the_python(self):
+        """Two copies of this logic exist; they must not drift."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        launcher = (root / "container" / "ligand3d").read_text()
+        assert "--user-data-dir=" in launcher
+        assert "cache/ligand3d}/browser" in launcher
+        assert "LIGAND3D_BROWSER" in launcher
+        assert "SSH_CONNECTION" in launcher
+
+
 class TestStaticAssets:
     def test_app_page_exists_and_wires_the_loader(self):
         page = (srv._STATIC / "app.html").read_text()

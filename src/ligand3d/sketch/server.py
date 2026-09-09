@@ -25,7 +25,6 @@ import socketserver
 import threading
 import urllib.parse
 import urllib.request
-import webbrowser
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -99,6 +98,9 @@ def _extract(payload: bytes, target: Path, strip_prefix: str | None = None) -> N
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source, open(destination, "wb") as out:
                 shutil.copyfileobj(source, out)
+
+
+from .browser import open_url
 
 
 def ensure_jsme(quiet: bool = False) -> Path | None:
@@ -596,15 +598,16 @@ def serve(
         label = engine.name if engine else "paste box"
         print(f"ligand3d sketcher ({label}) running at {url}")
         print("draw, set the options, and press Build. Ctrl-C to stop.")
-    # `webbrowser.open` returns False rather than raising when there is nothing
-    # to open — the normal case in a container and over SSH. Saying so beats
-    # printing a URL and letting someone wait for a window that never comes.
+    # Returns False rather than raising when there is nothing to open — the
+    # normal case in a container and over SSH. Saying so beats printing a URL
+    # and letting someone wait for a window that never comes.
+    #
+    # Not `webbrowser.open` directly: against a Chromium-family default that
+    # can seize the user's browser profile and take their tabs down with the
+    # sketcher when it closes. See sketch/browser.py.
     opened = False
     if open_browser:
-        try:
-            opened = webbrowser.open(url)
-        except Exception:
-            opened = False
+        opened = open_url(url)
     if not quiet and not opened:
         hint = _ssh_hint(port)
         if hint:

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.2 — 2026-09-09
+
+**`sketch` no longer shares your browser profile.**
+
+Opening the sketcher could take a whole Chrome session down. Handing a URL to `chrome`
+normally opens a tab in the running browser, but that depends on the singleton files in
+the Chrome profile naming a live process. When they are stale — Chrome was killed,
+crashed, or was OOM-killed — Chrome takes ownership of the profile instead. The
+sketcher's window is then the browser itself, so closing it quits Chrome and every
+unrelated tab with it.
+
+`sketch` now opens a Chromium-family browser against its own profile under
+`~/.cache/ligand3d/browser` (about 1 MB). It cannot take over your profile, cannot be
+taken over by it, and closing it closes nothing else. Firefox and other defaults are
+opened as before, and nothing is opened over SSH.
+
+`LIGAND3D_BROWSER=system` restores the old hand-off, `=none` opens nothing.
+
 ## 0.3.1 — 2026-09-09
 
 **Atom labels in the sketcher no longer have bonds drawn through them.**
