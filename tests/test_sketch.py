@@ -534,6 +534,29 @@ class TestOpeningTheBrowser:
         browser.open_url("http://127.0.0.1:8765/")
         assert not launched, "launched a GUI browser with no display"
 
+    def test_the_flag_outranks_the_environment(self, monkeypatch):
+        """`--system-browser` is an explicit ask; the env var is a preference."""
+        browser, launched, fallback = self._browser(monkeypatch)
+        monkeypatch.setenv("LIGAND3D_BROWSER", "auto")
+        assert browser.open_url("http://127.0.0.1:8765/", "system") is True
+        assert not launched, "the flag was ignored in favour of the environment"
+        assert fallback == ["http://127.0.0.1:8765/"]
+
+    def test_no_argument_leaves_the_environment_in_charge(self, monkeypatch):
+        browser, launched, fallback = self._browser(monkeypatch)
+        monkeypatch.setenv("LIGAND3D_BROWSER", "system")
+        assert browser.open_url("http://127.0.0.1:8765/") is True
+        assert not launched and fallback
+
+    def test_the_cli_offers_the_flag_and_defaults_it_off(self):
+        import inspect
+
+        from ligand3d.cli import sketch
+
+        param = inspect.signature(sketch).parameters["system_browser"]
+        assert param.default.default is False, "the safe behaviour must be the default"
+        assert "--system-browser" in param.default.param_decls
+
     def test_the_launcher_agrees_with_the_python(self):
         """Two copies of this logic exist; they must not drift."""
         import pathlib
@@ -544,6 +567,9 @@ class TestOpeningTheBrowser:
         assert "cache/ligand3d}/browser" in launcher
         assert "LIGAND3D_BROWSER" in launcher
         assert "SSH_CONNECTION" in launcher
+        # The launcher opens the browser itself, so the flag has to be parsed
+        # out here as well as inside the container.
+        assert "--system-browser) system_browser=1" in launcher
 
 
 class TestStaticAssets:

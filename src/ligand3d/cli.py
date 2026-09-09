@@ -824,6 +824,13 @@ def sketch(
     no_browser: bool = typer.Option(
         False, "--no-browser", help="Print the URL instead of opening a browser."
     ),
+    system_browser: bool = typer.Option(
+        False,
+        "--system-browser",
+        help="Open in your normal browser session instead of a separate profile. "
+        "Off by default: if Chrome's profile lock is stale the sketcher's window "
+        "becomes your browser, so closing it closes every other tab.",
+    ),
     directory: Optional[Path] = typer.Option(
         None, "--directory", "-d", help="Where built structures go. Defaults to the cwd."
     ),
@@ -848,7 +855,12 @@ def sketch(
         "threads": threads,
     }
     try:
-        serve(port=port, open_browser=not no_browser, defaults=defaults)
+        serve(
+            port=port,
+            open_browser=not no_browser,
+            defaults=defaults,
+            browser_mode="system" if system_browser else None,
+        )
     except Ligand3DError as exc:
         _fail(exc)
 

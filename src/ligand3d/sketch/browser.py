@@ -75,9 +75,14 @@ def _chromium() -> str | None:
     return None
 
 
-def open_url(url: str) -> bool:
-    """Show `url` to the user. True if something was launched."""
-    mode = os.environ.get("LIGAND3D_BROWSER", "auto").strip().lower()
+def open_url(url: str, mode: str | None = None) -> bool:
+    """Show `url` to the user. True if something was launched.
+
+    `mode` is `--system-browser` and friends: an explicit request from the
+    command line, which outranks the environment. Left as None the environment
+    decides, and failing that the isolated default.
+    """
+    mode = (mode or os.environ.get("LIGAND3D_BROWSER", "auto")).strip().lower()
     if mode == "none":
         return False
     if mode != "system":

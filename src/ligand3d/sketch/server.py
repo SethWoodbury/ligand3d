@@ -560,6 +560,7 @@ def serve(
     quiet: bool = False,
     defaults: dict[str, Any] | None = None,
     block: bool = True,
+    browser_mode: str | None = None,
 ) -> tuple[_Server, int]:
     """Start the sketcher session. Runs until interrupted.
 
@@ -607,7 +608,7 @@ def serve(
     # sketcher when it closes. See sketch/browser.py.
     opened = False
     if open_browser:
-        opened = open_url(url)
+        opened = open_url(url, browser_mode)
     if not quiet and not opened:
         hint = _ssh_hint(port)
         if hint:

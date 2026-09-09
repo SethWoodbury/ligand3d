@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3 — 2026-09-09
+
+`ligand3d sketch --system-browser` opens the sketcher in your normal browser session
+rather than the separate profile 0.3.2 introduced — the pre-0.3.2 behaviour, now a
+per-run choice instead of only an environment variable. It defaults off, because the
+failure it avoids is losing every open tab. The flag outranks `LIGAND3D_BROWSER`.
+
+Docs only otherwise: the CLI reference gained the flag, and `docs/cli.md` now covers
+which browser `sketch` opens and why.
+
 ## 0.3.2 — 2026-09-09
 
 **`sketch` no longer shares your browser profile.**

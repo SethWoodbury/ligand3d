@@ -5,7 +5,7 @@ from __future__ import annotations
 # Kept in step with pyproject.toml by a test rather than read from package
 # metadata at import time: importlib.metadata pulls in email.parser, and
 # this import is on the path of every CLI invocation.
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 from .errors import (
     BackendMismatch,

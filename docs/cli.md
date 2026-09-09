@@ -81,6 +81,15 @@ of the profile** — the sketcher's window becomes the browser, so closing it qu
 and every unrelated tab with it. A local tool should not be able to do that, so it does
 not share your profile at all. Firefox and other defaults are opened normally.
 
+Per run, from the command line:
+
+```bash
+ligand3d sketch --system-browser    # a tab in your normal browser, old behaviour
+ligand3d sketch --no-browser        # print the URL, open nothing
+```
+
+Or set it once for a shell, which `--system-browser` still overrides:
+
 | `LIGAND3D_BROWSER` | |
 |---|---|
 | unset / `auto` | the isolated window described above |
