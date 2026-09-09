@@ -816,13 +816,19 @@ window.jsmeOnLoad = function () {
   // makes anything other than carbon look ragged. Each call is guarded: these
   // are JSME-version-dependent, and losing the editor over a cosmetic setter
   // would be a bad trade.
+  // Antialiasing only, deliberately.
+  //
+  // Enlarging the atom font looked like the obvious way to give a label room,
+  // and it is the wrong lever: JSME clips each bond so it stops at the label's
+  // edge, and that clip radius comes from its own expected font metrics. Grow
+  // the font without JSME recomputing the clip and the label spreads past
+  // where the bond stops — so lines run through N, and an O ends up looking
+  // detached from the carbon it is bonded to. Same trap with line width.
+  //
+  // Antialiasing changes no geometry, which is why it is the only one left.
   [
     ["setAntialias", true],
     ["setMolecularAreaAntiAlias", true],
-    // A little larger, so a label has room to sit clear of its bonds. Much
-    // larger and the labels start colliding with each other instead.
-    ["setAtomMolecularAreaFontSize", 15.0],
-    ["setMolecularAreaLineWidth", 1.3],
   ].forEach(function (pair) {
     try {
       if (typeof jsmeApplet[pair[0]] === "function") jsmeApplet[pair[0]](pair[1]);
