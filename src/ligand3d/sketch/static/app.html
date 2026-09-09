@@ -809,6 +809,25 @@ window.jsmeOnLoad = function () {
   jsmeApplet = new JSApplet.JSME("sketchHost", "100%", "100%", {
     options: "stereo,autoez,paste,multipart",
   });
+
+  // Appearance only — none of this changes what is drawn, just how it reads.
+  // Element labels sit on top of the bonds that meet them, and without
+  // antialiasing those junctions have hard stair-stepped edges, which is what
+  // makes anything other than carbon look ragged. Each call is guarded: these
+  // are JSME-version-dependent, and losing the editor over a cosmetic setter
+  // would be a bad trade.
+  [
+    ["setAntialias", true],
+    ["setMolecularAreaAntiAlias", true],
+    // A little larger, so a label has room to sit clear of its bonds. Much
+    // larger and the labels start colliding with each other instead.
+    ["setAtomMolecularAreaFontSize", 15.0],
+    ["setMolecularAreaLineWidth", 1.3],
+  ].forEach(function (pair) {
+    try {
+      if (typeof jsmeApplet[pair[0]] === "function") jsmeApplet[pair[0]](pair[1]);
+    } catch (e) { /* older JSME: it simply looks as it did before */ }
+  });
   // Every edit refreshes the "how ligand3d reads it" panel, which is the only
   // way to tell which atom the messages mean by number.
   try {
