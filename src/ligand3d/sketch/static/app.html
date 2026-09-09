@@ -670,8 +670,16 @@
         </div>
         <div class="checks">
           <label title="A salt or solvate parses as several disconnected molecules. This keeps the one with the most heavy atoms and discards the rest — usually the counterion. The run log names what was dropped."><input type="checkbox" id="largest_fragment"> largest fragment only <span class="note">(drops counterions)</span></label>
-          <label><input type="checkbox" id="allow_charge_mismatch"> allow charge mismatch</label>
-          <label><input type="checkbox" id="allow_proton_transfer"> allow proton transfer</label>
+        </div>
+        <div class="note" style="margin:.1rem 0 .3rem">
+          The two below switch <em>off</em> a check. Leave them alone unless a refusal is
+          telling you something you already know.
+        </div>
+        <div class="checks">
+          <label title="A potential with no charge channel cannot tell a carboxylate from a neutral acid, so ligand3d refuses that pairing. Ticking this runs it anyway, treating the molecule as neutral."><input type="checkbox" id="allow_charge_mismatch">
+            run a charge-blind method on an ion <span class="note">(skips the charge check)</span></label>
+          <label title="After minimizing, ligand3d checks that every hydrogen is still on the heavy atom it started on. A proton that moved usually means a gas-phase zwitterion collapsed and you have a different molecule. Ticking this accepts the moved proton — for when the transfer is what you are studying."><input type="checkbox" id="allow_proton_transfer">
+            accept a proton that moved <span class="note">(skips the protonation check)</span></label>
         </div>
       </div>
 
