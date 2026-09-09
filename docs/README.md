@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | [Installing](install.md) | what to install per tier, and where weights come from |
+| [Commands](cli.md) | every CLI command, and when to reach for it |
 | [Methods](methods.md) | every level of theory, what it costs, how to choose |
 | [ML potentials](models.md) | the neural tier and the environment split |
 | [Chemistry](chemistry.md) | stereochemistry, protonation, conformers, name lookup |

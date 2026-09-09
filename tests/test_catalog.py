@@ -163,6 +163,44 @@ class TestModelMetadata:
         assert MODELS_BY_KEY["mace-off"].charge_handling == "implicit"
 
 
+class TestTheDocsMatchTheCLI:
+    """`embed`, `minimize` and `version` existed for months documented nowhere but
+    `--help`, and docs/cli.md was written with a `-q` that three of the commands
+    it showed do not accept. Both directions are worth checking."""
+
+    @staticmethod
+    def _commands() -> set[str]:
+        from typer.main import get_command
+
+        from ligand3d.cli import app
+
+        # Hidden commands are not user surface: `slurm-run` is what the
+        # generated job script invokes on the compute node, and documenting it
+        # would invite people to call it by hand with a payload they hand-wrote.
+        return {
+            name
+            for name, cmd in get_command(app).commands.items()
+            if not getattr(cmd, "hidden", False)
+        }
+
+    @staticmethod
+    def _documented() -> set[str]:
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        text = (root / "docs" / "cli.md").read_text()
+        return set(re.findall(r"`ligand3d ([a-z-]+)", text))
+
+    def test_every_command_is_documented(self):
+        missing = self._commands() - self._documented()
+        assert not missing, f"docs/cli.md never mentions: {sorted(missing)}"
+
+    def test_the_docs_invent_no_commands(self):
+        invented = self._documented() - self._commands()
+        assert not invented, f"docs/cli.md shows commands that do not exist: {sorted(invented)}"
+
+
 class TestPackaging:
     """The extras are mutually exclusive; uv has to be told, or CI fails."""
 

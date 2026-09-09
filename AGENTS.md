@@ -84,4 +84,20 @@ ligand3d params ensemble.sdf --code LIG     # Rosetta params
 ligand3d convert min.cif min.pdb
 ```
 
+`build` is embed-then-minimize in one step. The two halves are also separate commands,
+which is what you want when the geometry and the minimization belong to different runs:
+
+```bash
+ligand3d embed "<smiles>" -o raw.sdf        # ETKDG coordinates, no minimization
+ligand3d minimize raw.sdf -b gfn2 -o min.cif  # minimizes every conformer in the file
+```
+
+And to interrogate the installation itself:
+
+```bash
+ligand3d version                            # just the version, for logs and bug reports
+ligand3d solvents                           # implicit solvents ALPB is parameterized for
+ligand3d config                             # inspect or create the config file
+```
+
 `ligand3d <command> --help` is accurate and worth reading before guessing at flags.
