@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -507,6 +508,36 @@ class TestAppJavaScript:
             [node, "--check", str(script)], capture_output=True, text=True, timeout=60
         )
         assert result.returncode == 0, result.stderr
+
+    def test_body_is_not_a_flex_container(self):
+        """JSME cannot measure its atom labels if <body> is a flex container.
+
+        JSME sizes the white rectangle that masks the bond behind each atom
+        label from the on-screen width of the label text, which it obtains with
+        a probe element appended to <body>. As a flex item that probe reports a
+        width JSME rejects, so it falls back to a default string width: measured
+        against a version of this page whose only difference was this property,
+        multi-character labels got a 150-unit mask where they needed 720-930,
+        while single letters stayed correct. Visibly, the bond ran through the
+        "N" of NH2 and an "O" looked detached from its own carbon.
+
+        The page's flex column therefore lives on `.shell`. Putting it back on
+        <body> would silently reintroduce the defect, since nothing throws.
+        """
+        html = (srv._STATIC / "app.html").read_text()
+        style = html[html.index("<style>"):html.index("</style>")]
+        # Isolate the `body { ... }` block, not `html, body { height }` and not
+        # any selector that merely contains the word.
+        body_rule = re.search(r"\n  body \{(.*?)\}", style, re.S)
+        assert body_rule, "no `body { ... }` rule found; has the stylesheet moved?"
+        assert "display:" not in body_rule.group(1), (
+            "body sets `display`, which breaks JSME's label measurement: "
+            f"{body_rule.group(1).strip()!r}"
+        )
+        assert ".shell { height: 100%; display: flex;" in style, (
+            "the page's flex column should be on .shell, not on body"
+        )
+        assert '<div class="shell">' in html
 
     def test_every_referenced_element_id_exists(self):
         """`el("typo")` returns null and fails silently at runtime."""

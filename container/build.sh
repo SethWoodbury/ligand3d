@@ -150,7 +150,8 @@ needs e3nn>=0.5 — one environment cannot hold both.
 the browser after the image has already been picked. It binds 127.0.0.1 on port
 8765; over SSH, forward that port to reach the page.
 
---slurm needs sbatch and cannot run from a container; use a checkout for that.
+--slurm works from inside the container: the launcher binds sbatch, the plugin
+directory, /etc/slurm and munge's socket. DFT goes to CPU nodes.
 EOF
 
 # Copy into place only once everything above succeeded, so a failed build never

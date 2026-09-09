@@ -74,6 +74,7 @@ refines what the last produced, and only the survivors reach the expensive end.
 | | |
 |---|---|
 | **[Installing](docs/install.md)** | what to install per tier, and where weights come from |
+| **[Changelog](CHANGELOG.md)** | what changed in each release |
 | **[Methods](docs/methods.md)** | every level of theory, what it costs, how to choose |
 | **[ML potentials](docs/models.md)** | the neural tier and the environment split |
 | **[Chemistry](docs/chemistry.md)** | stereochemistry, protonation, conformers, name lookup |

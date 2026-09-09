@@ -178,6 +178,26 @@ class TestPackaging:
         root = pathlib.Path(__file__).resolve().parents[1]
         return (root / "pyproject.toml").read_text()
 
+    def test_the_reported_version_matches_the_package(self):
+        """`__version__` sat at 0.1.0 while the package was 0.3.0.
+
+        It is not cosmetic: `ligand3d version` prints it, and write.py stamps it
+        into the header of every structure written, so months of output claimed
+        to come from a release three versions old. It is a literal rather than a
+        lookup because importlib.metadata pulls in email.parser on a path taken
+        by every CLI invocation -- so this test is what keeps the two in step.
+        """
+        from ligand3d import __version__
+
+        declared = next(
+            ln.split('"')[1]
+            for ln in self._text().splitlines()
+            if ln.startswith("version = ")
+        )
+        assert __version__ == declared, (
+            f"pyproject says {declared}, ligand3d.__version__ says {__version__}"
+        )
+
     def test_the_conflict_is_declared(self):
         text = self._text()
         assert "[tool.uv]" in text

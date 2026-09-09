@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+# Kept in step with pyproject.toml by a test rather than read from package
+# metadata at import time: importlib.metadata pulls in email.parser, and
+# this import is on the path of every CLI invocation.
+__version__ = "0.3.1"
 
 from .errors import (
     BackendMismatch,

@@ -26,8 +26,18 @@
   body {
     background: var(--bg); color: var(--fg);
     font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    display: flex; flex-direction: column;
   }
+  /* The page's flex column deliberately lives on this wrapper and not on
+     <body>. JSME measures the on-screen width of every atom label with a probe
+     element it appends to <body>; when <body> is a flex container that probe
+     reports a useless width, JSME falls back to its default string width, and
+     the white rectangle it draws to mask the bond behind a label comes out one
+     third of a character wide. That is what put the bond line through the "N"
+     of NH2 and made an "O" look detached from its carbon: multi-character
+     labels got a 150-unit mask where they needed 720-930, while single-letter
+     labels (measured from a built-in table) were always correct. Keeping
+     <body> a plain block is the whole fix -- measured, not guessed. */
+  .shell { height: 100%; display: flex; flex-direction: column; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
   header {
@@ -332,6 +342,7 @@
 </style>
 </head>
 <body>
+<div class="shell">
 <header>
   <h1>ligand3d</h1>
   <span class="tag" id="engineTag">loading…</span>
@@ -738,6 +749,7 @@
   <span>built on RDKit, xTB/tblite, MACE, AIMNet2, ASE, JSME, gemmi</span>
   <span id="versionTag"></span>
 </footer>
+</div>
 
 <dialog id="confirmDialog">
   <h2 style="margin:0;font-size:.98rem">Overwrite existing files?</h2>
